@@ -8,6 +8,23 @@ Updated: 2026-11-12
 
 **Linked-twin manual walkthrough:** in the assigned teacher's course, create two distinct practice questions for the same concept, then use **Link an independent twin** to pair them. As an enrolled student with a completed baseline, submit the original, choose **Solve linked twin**, and answer without hints. Verify the independent count increases once. With another authorized student or fresh teacher-authored pair, request a hint on the twin and verify only assisted evidence increases. Refresh to verify **Resume linked twin** retains used hints. Use real accounts/material only; fixtures belong exclusively in `npm run test:isolated`.
 
+**MVP timing:** aim to freeze and verify the Preview by **7:30 p.m. IST**, then hand it over with any remaining live-test blockers by **8:00 p.m. IST tonight**.
+
+## Exact owner walkthrough for the MVP
+
+Use real institute accounts and course material in Preview. Do not create demo records in the shared development or production database.
+
+1. Sign in as an assigned NST teacher and open or create the intended course.
+2. Enroll the real NST student by the verified institutional email.
+3. Upload/paste a resource, save it, and publish it.
+4. Add a concept linked to that resource.
+5. Create a baseline assessment. Add at least one question with a prompt, expected answer, the published resource, and the concept; then publish the assessment.
+6. Add two teacher-approved practice problems for the same concept. Link the second as the first problem's independent twin and confirm the link in the teacher list.
+7. Sign in as the enrolled student, open that course, and submit the baseline.
+8. Open the concept and request a lesson. Confirm it includes a citation to the published material; open the cited source excerpt and answer the comprehension check.
+9. Start the original practice problem and submit an answer. Open the linked twin follow-up and answer without requesting a hint.
+10. Confirm the student concept shows a one-time increase in independent attempts/correct evidence and refresh the page to confirm it persists. If testing the assisted path, use a fresh teacher-approved twin and request a hint before answering; only assisted evidence should increase.
+
 Status meanings: **Implemented** = feature exists in this project; **Partial** = a working slice exists, but the brief requires more; **Not started** = not implemented; **Pending live test** = code/test exists, but real account/provider verification remains outstanding.
 
 ## Original 22 study features
