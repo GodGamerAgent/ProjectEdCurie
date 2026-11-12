@@ -436,12 +436,12 @@ describe("foundation access and onboarding", () => {
 
     const availability=`/api/courses/${course.id}/availability`;
     expect((await request(app).get(availability).set(as("student"))).body.availability.intervals).toEqual([]);
-    const saved=await request(app).put(availability).set(as("student")).send({timezone:"Asia/Kolkata",intervals:[
+    const saved=await request(app).put(availability).set(as("student")).send({timezone:"Asia/Kolkata",sessionMinutes:30,intervals:[
       {weekday:1,startTime:"09:00",endTime:"12:00"},{weekday:1,startTime:"12:00",endTime:"13:00"},{weekday:3,startTime:"16:00",endTime:"18:00"}
     ]});
     expect(saved.status).toBe(200);expect(saved.body.availability.intervals).toHaveLength(3);
     expect((await request(app).put(availability).set(as("student")).send({timezone:"Invalid/Zone",intervals:[]})).status).toBe(400);
-    expect((await request(app).put(availability).set(as("student")).send({timezone:"Asia/Kolkata",intervals:[
+    expect((await request(app).put(availability).set(as("student")).send({timezone:"Asia/Kolkata",sessionMinutes:30,intervals:[
       {weekday:1,startTime:"09:00",endTime:"11:00"},{weekday:1,startTime:"10:30",endTime:"12:00"}
     ]})).status).toBe(400);
     expect((await request(app).get(availability).set(as("teacher"))).status).toBe(403);
@@ -457,5 +457,69 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).get(commitments).set(as("student"))).body.commitments).toHaveLength(1);
     expect((await request(app).get(commitments).set(as("outsider"))).body.commitments).toEqual([]);
     expect((await request(app).delete(`${commitments}/${commitment.body.commitment.id}`).set(as("student"))).status).toBe(200);
+  });
+  it("builds a deadline-fixed study plan around classes and private commitments",async()=>{
+    const day=(offset:number)=>{const d=new Date();d.setUTCDate(d.getUTCDate()+offset);return d.toISOString().slice(0,10);};
+    const today=day(0),deadline=day(20),blockedDate=day(5),weekday=(date:string)=>{const n=new Date(`${date}T00:00:00Z`).getUTCDay();return n===0?7:n;};
+    const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Plan workflow"})).body;
+    expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);
+    const resource=(await request(app).post(`/api/courses/${course.id}/resources`).set(as("teacher")).field("title","Planning source").field("text","Study the concept in stages.")).body;
+    expect((await request(app).post(`/api/resources/${resource.id}/publish`).set(as("teacher"))).status).toBe(200);
+    const concept=(await request(app).post(`/api/courses/${course.id}/concepts`).set(as("teacher")).send({name:"Planning concept",resourceId:resource.id})).body;
+    const assessment=(await request(app).post(`/api/courses/${course.id}/assessments`).set(as("teacher")).send({title:"Planning baseline"})).body;
+    const question=(await request(app).post(`/api/assessments/${assessment.id}/questions`).set(as("teacher")).send({prompt:"What is planned?",answer:"study",resourceId:resource.id,conceptId:concept.id})).body;
+    expect((await request(app).post(`/api/assessments/${assessment.id}/publish`).set(as("teacher"))).status).toBe(200);
+    expect((await request(app).patch(`/api/concepts/${concept.id}/estimate`).set(as("teacher")).send({learningMinutes:30,practiceMinutes:20,revisionMinutes:10,difficulty:4})).status).toBe(200);
+    const baseline=await request(app).post(`/api/courses/${course.id}/assessment/start`).set(as("student"));
+    expect((await request(app).post(`/api/courses/${course.id}/assessment/submit`).set(as("student")).send({sessionId:baseline.body.sessionId,answers:{[question.id]:"study"}})).status).toBe(201);
+    const goal=`/api/courses/${course.id}/goal`,availability=`/api/courses/${course.id}/availability`;
+    expect((await request(app).get(`/api/courses/${course.id}/feasibility`).set(as("student"))).status).toBe(400);
+    expect((await request(app).patch(`/api/concepts/${concept.id}/estimate`).set(as("student")).send({learningMinutes:10,practiceMinutes:10,revisionMinutes:10,difficulty:2})).status).toBe(403);
+    expect((await request(app).put(goal).set(as("student")).send({goal:"Prepare steadily",deadline,availability:""})).status).toBe(200);
+    const noTime=await request(app).get(`/api/courses/${course.id}/feasibility`).set(as("student"));
+    expect(noTime.body).toMatchObject({score:1,capacityMinutes:0});
+    expect((await request(app).put(availability).set(as("student")).send({timezone:"Asia/Kolkata",sessionMinutes:30,
+      intervals:[1,2,3,4,5,6,7].map(weekday=>({weekday,startTime:"09:00",endTime:"12:00"}))})).status).toBe(200);
+    const event=await request(app).post(`/api/courses/${course.id}/timetable`).set(as("teacher")).send({
+      title:"Recurring class",weekday:weekday(blockedDate),startTime:"09:30",endTime:"10:30",startsOn:today,endsOn:deadline,timezone:"Asia/Kolkata"
+    });
+    expect(event.status).toBe(201);
+    const commitment=await request(app).post(`/api/courses/${course.id}/commitments`).set(as("student")).send({
+      title:"Private appointment",startsAt:`${blockedDate}T10:45:00+05:30`,endsAt:`${blockedDate}T11:15:00+05:30`,timezone:"Asia/Kolkata",courseId:course.id
+    });
+    expect(commitment.status).toBe(201);
+    const feasibility=await request(app).get(`/api/courses/${course.id}/feasibility`).set(as("student"));
+    expect(feasibility.status).toBe(200);expect(feasibility.body.requiredMinutes).toBe(60);expect(feasibility.body.capacityMinutes).toBeGreaterThan(0);
+    const requestKey="41126392-20cb-4d69-82a4-f1a376c98310";
+    const created=await request(app).post(`/api/courses/${course.id}/plan`).set(as("student")).send({requestKey});
+    expect(created.status).toBe(200);expect(created.body.plan.deadline).toBe(deadline);
+    expect(created.body.blocks.map((b:any)=>b.phase)).toEqual(expect.arrayContaining(["learning","practice","revision"]));
+    expect(created.body.blocks.every((b:any)=>new Date(b.endsAt)<=new Date(`${deadline}T23:59:59Z`))).toBe(true);
+    const repeated=await request(app).post(`/api/courses/${course.id}/plan`).set(as("student")).send({requestKey});
+    expect(repeated.body).toEqual(created.body);
+    const when=(stamp:string)=>new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Kolkata",weekday:"short",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(stamp));
+    for(const block of created.body.blocks){
+      const start=Date.parse(block.startsAt),end=Date.parse(block.endsAt);
+      expect(start).toBeGreaterThanOrEqual(Date.now());
+      expect(start<Date.parse(commitment.body.commitment.endsAt)&&Date.parse(commitment.body.commitment.startsAt)<end).toBe(false);
+      const parts=Object.fromEntries(when(block.startsAt).map((p:any)=>[p.type,p.value]));
+      const endParts=Object.fromEntries(when(block.endsAt).map((p:any)=>[p.type,p.value]));
+      if(parts.year+"-"+parts.month+"-"+parts.day===blockedDate){
+        const a=Number(parts.hour)*60+Number(parts.minute),b=Number(endParts.hour)*60+Number(endParts.minute);
+        expect(b<=570||a>=630).toBe(true);
+        expect(b<=645||a>=675).toBe(true);
+      }
+    }
+    expect((await request(app).get(`/api/courses/${course.id}/plan`).set(as("otherInstituteStudent"))).status).toBe(403);
+    const first=created.body.blocks[0];
+    expect((await request(app).post(`/api/study-blocks/${first.id}/start`).set(as("outsider"))).status).toBe(404);
+    expect((await request(app).post(`/api/study-blocks/${first.id}/complete`).set(as("student"))).status).toBe(409);
+    expect((await request(app).post(`/api/study-blocks/${first.id}/start`).set(as("student"))).status).toBe(200);
+    expect((await request(app).post(`/api/study-blocks/${first.id}/complete`).set(as("student"))).status).toBe(200);
+    expect((await request(app).put(goal).set(as("student")).send({goal:"A later target",deadline:day(25),availability:""})).status).toBe(200);
+    const replanned=await request(app).post(`/api/courses/${course.id}/plan`).set(as("student")).send({requestKey:"b8fb6a30-4e9f-46e3-8a38-1cdf03991d77"});
+    expect(replanned.body.plan.deadline).toBe(deadline);
+    expect(replanned.body.plan.version).toBe(2);expect(replanned.body.plan.required_minutes).toBe(30);
+    expect((await request(app).get(`/api/courses/${course.id}/plan`).set(as("student"))).body.blocks.some((b:any)=>b.id===first.id&&b.state==="completed")).toBe(true);
   });
 });

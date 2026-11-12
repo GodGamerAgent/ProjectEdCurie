@@ -86,19 +86,41 @@ export function planningRoutes(db:Pool) {
     if(!result.rowCount)throw new HttpError(404,"Class event not found.");
     res.json({cancelled:true});
   });
+  router.get("/api/courses/:id/estimates",async(req,res)=>{
+    await teacherCourse(db,currentUser(res),req.params.id);
+    const data=await db.query(`SELECT id,name,learning_minutes AS "learningMinutes",practice_minutes AS "practiceMinutes",
+      revision_minutes AS "revisionMinutes",difficulty FROM concepts WHERE course_id=$1 ORDER BY name`,[req.params.id]);
+    res.json({concepts:data.rows});
+  });
+  router.patch("/api/concepts/:id/estimate",async(req,res)=>{
+    const user=currentUser(res),id=uuid(req.params.id);
+    const concept=(await db.query("SELECT course_id AS \"courseId\" FROM concepts WHERE id=$1",[id])).rows[0];
+    if(!concept)throw new HttpError(404,"Concept not found.");
+    await teacherCourse(db,user,concept.courseId);
+    const values={learning:req.body?.learningMinutes,practice:req.body?.practiceMinutes,revision:req.body?.revisionMinutes,difficulty:req.body?.difficulty};
+    if(!Number.isInteger(values.learning)||values.learning<5||values.learning>180||!Number.isInteger(values.practice)||values.practice<5||values.practice>120||
+      !Number.isInteger(values.revision)||values.revision<5||values.revision>90||!Number.isInteger(values.difficulty)||values.difficulty<1||values.difficulty>5)
+      throw new HttpError(400,"Use valid minute estimates and a difficulty rating from 1 to 5.");
+    const saved=await db.query(`UPDATE concepts SET learning_minutes=$2,practice_minutes=$3,revision_minutes=$4,difficulty=$5
+      WHERE id=$1 RETURNING id,name,learning_minutes AS "learningMinutes",practice_minutes AS "practiceMinutes",
+      revision_minutes AS "revisionMinutes",difficulty`,[id,values.learning,values.practice,values.revision,values.difficulty]);
+    res.json({concept:saved.rows[0]});
+  });
   router.get("/api/courses/:id/availability",async(req,res)=>{
     const user=currentUser(res);await courseAccess(db,user,req.params.id);
     if(user.role!=="student")throw new HttpError(403,"Availability belongs to an enrolled student.");
-    const data=await db.query(`SELECT timezone,intervals FROM student_availability WHERE user_id=$1 AND course_id=$2`,[user.id,req.params.id]);
-    res.json({availability:data.rows[0]??{timezone:"Asia/Kolkata",intervals:[]}});
+    const data=await db.query(`SELECT timezone,session_minutes AS "sessionMinutes",intervals FROM student_availability WHERE user_id=$1 AND course_id=$2`,[user.id,req.params.id]);
+    res.json({availability:data.rows[0]??{timezone:"Asia/Kolkata",sessionMinutes:30,intervals:[]}});
   });
   router.put("/api/courses/:id/availability",async(req,res)=>{
     const user=currentUser(res);await courseAccess(db,user,req.params.id);
     if(user.role!=="student")throw new HttpError(403,"Availability belongs to an enrolled student.");
     const value=intervals(req.body?.intervals,validTimezone(req.body?.timezone));
-    const saved=await db.query(`INSERT INTO student_availability(user_id,course_id,timezone,intervals) VALUES($1,$2,$3,$4::jsonb)
-      ON CONFLICT(user_id,course_id) DO UPDATE SET timezone=$3,intervals=$4::jsonb RETURNING timezone,intervals`,
-    [user.id,req.params.id,value.timezone,JSON.stringify(value.intervals)]);
+    const sessionMinutes=req.body?.sessionMinutes;
+    if(![15,25,30,45,60,90,120].includes(sessionMinutes))throw new HttpError(400,"Choose a supported study-session length.");
+    const saved=await db.query(`INSERT INTO student_availability(user_id,course_id,timezone,session_minutes,intervals) VALUES($1,$2,$3,$4,$5::jsonb)
+      ON CONFLICT(user_id,course_id) DO UPDATE SET timezone=$3,session_minutes=$4,intervals=$5::jsonb RETURNING timezone,session_minutes AS "sessionMinutes",intervals`,
+    [user.id,req.params.id,value.timezone,sessionMinutes,JSON.stringify(value.intervals)]);
     res.json({availability:saved.rows[0]});
   });
   router.get("/api/courses/:id/commitments",async(req,res)=>{

@@ -75,6 +75,10 @@ export const concepts = pgTable("concepts", {
   courseId: uuid("course_id").notNull().references(() => courses.id),
   name: text("name").notNull(),
   resourceId: uuid("resource_id").notNull().references(() => resources.id),
+  learningMinutes: integer("learning_minutes").notNull().default(30),
+  practiceMinutes: integer("practice_minutes").notNull().default(20),
+  revisionMinutes: integer("revision_minutes").notNull().default(10),
+  difficulty: integer("difficulty").notNull().default(3),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 export const conceptPrerequisites = pgTable("concept_prerequisites", {
@@ -237,6 +241,7 @@ export const studentAvailability = pgTable("student_availability", {
   userId: uuid("user_id").notNull().references(() => users.id),
   courseId: uuid("course_id").notNull().references(() => courses.id),
   timezone: text("timezone").notNull(),
+  sessionMinutes: integer("session_minutes").notNull().default(30),
   intervals: jsonb("intervals").$type<{weekday:number;startTime:string;endTime:string}[]>().notNull().default([])
 },table=>[uniqueIndex("student_availability_user_course_unique").on(table.userId,table.courseId)]);
 export const studentCommitments = pgTable("student_commitments", {
@@ -248,6 +253,33 @@ export const studentCommitments = pgTable("student_commitments", {
   endsAt: timestamp("ends_at",{withTimezone:true}).notNull(),
   timezone: text("timezone").notNull(),
   createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+});
+export const studyPlans = pgTable("study_plans", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  requestKey: uuid("request_key").notNull().unique(),
+  version: integer("version").notNull(),
+  deadline: text("deadline").notNull(),
+  feasibilityScore: integer("feasibility_score").notNull(),
+  requiredMinutes: integer("required_minutes").notNull(),
+  capacityMinutes: integer("capacity_minutes").notNull(),
+  explanation: text("explanation").notNull(),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+});
+export const studyBlocks = pgTable("study_blocks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  planId: uuid("plan_id").notNull().references(() => studyPlans.id),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  phase: text("phase").notNull(),
+  startsAt: timestamp("starts_at",{withTimezone:true}).notNull(),
+  endsAt: timestamp("ends_at",{withTimezone:true}).notNull(),
+  state: text("state").notNull().default("planned"),
+  explanation: text("explanation").notNull(),
+  startedAt: timestamp("started_at",{withTimezone:true}),
+  completedAt: timestamp("completed_at",{withTimezone:true})
 });
 export const aiGenerations = pgTable("ai_generations", {
   id: uuid("id").defaultRandom().primaryKey(),

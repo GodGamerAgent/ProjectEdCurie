@@ -62,7 +62,7 @@ export function TeacherStudy({ courseId, resources, assessments, concepts, refre
       </form></>}
     </>}
     <TwinLinker courseId={courseId} revision={assessments}/>
-    <TeacherTimetable courseId={courseId}/>
+    <TeacherTimetable courseId={courseId} concepts={concepts}/>
     <div className="divider"/><div className="row"><h3>Student progress</h3><button className="button small" type="button" onClick={()=>void loadProgress().catch((e)=>setError(e.message))}>Refresh progress</button></div>
     {progress.length ? <div className="stack">{progress.map((p)=><div className="course-card" key={`${p.studentId}-${p.conceptId}`}><strong>{p.email} · {p.name}</strong><p>{p.status} · Independent {p.independent_correct}/{p.independent_attempts} · Assisted {p.assisted_correct}/{p.assisted_attempts}</p></div>)}</div> : <p className="muted">Progress appears once students and concepts are available.</p>}
   </section>;
@@ -72,6 +72,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   const [concepts,setConcepts]=useState<Concept[]>([]); const [evidence,setEvidence]=useState<Evidence[]>([]);
   const [targets,setTargets]=useState<{conceptId:string;name:string;reason:string}[]>([]);
   const [selected,setSelected]=useState(""); const [goal,setGoal]=useState("");const [deadline,setDeadline]=useState("");const [availability,setAvailability]=useState("");
+  const [goalRefreshKey,setGoalRefreshKey]=useState(0),[plannedPhase,setPlannedPhase]=useState("");
   const [lesson,setLesson]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
   const [history,setHistory]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[];checks:LessonCheck[]}[]>([]);
   const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string;kind?:string}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
@@ -91,7 +92,8 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   },[courseId,baselineReady]);
   useEffect(()=>{void refresh().catch((e)=>setError(e.message));},[refresh]);
   async function run(action:()=>Promise<void>){setBusy(true);setError("");setNotice("");try{await action();}catch(e){setError(e instanceof Error?e.message:"The action could not be completed.");}finally{setBusy(false);}}
-  function saveGoal(e:FormEvent){e.preventDefault();void run(async()=>{await api(`/api/courses/${courseId}/goal`,{method:"PUT",body:jsonBody({goal,deadline,availability})});setNotice("Study goal saved.");});}
+  function saveGoal(e:FormEvent){e.preventDefault();void run(async()=>{await api(`/api/courses/${courseId}/goal`,{method:"PUT",body:jsonBody({goal,deadline,availability})});setNotice("Study goal saved.");setGoalRefreshKey(x=>x+1);});}
+  function openPlannedConcept(conceptId:string,phase:string){setSelected(conceptId);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);setPlannedPhase(phase);}
   return <section className="study-section"><div className="divider"/><div className="eyebrow">Your study loop</div><h3>Goal and concept mastery</h3>
     {error && <div className="notice error" role="alert">{error}</div>}{notice && <div className="notice success" role="status">{notice}</div>}
     <form className="form-grid" onSubmit={saveGoal}><div className="field full"><label htmlFor="study-goal">Study goal</label><input id="study-goal" required value={goal} onChange={(e)=>setGoal(e.target.value)}/></div>
@@ -111,6 +113,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     <p className="muted" style={{marginTop:20}}>Explanation format and hint style can be changed in Preferences.</p>
     {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Your teacher has not added concepts yet.</p>}
     {selected && <div className="resource-card" style={{marginTop:18}}><h3>{concepts.find((x)=>x.id===selected)?.name}</h3>
+    {plannedPhase&&<p className="notice">Scheduled phase: {plannedPhase}. Use the matching lesson or practice action below, then mark the session complete in your plan.</p>}
     {followups.filter(f=>f.conceptId===selected).map(f=><div className="notice" key={f.originalSessionId} style={{marginBottom:12}}>
       <strong>Twin follow-up</strong><p>After: {f.originalPrompt}</p>
       {f.status==="completed"?<p>Twin completed. Its independent or assisted result is included in your evidence.</p>:f.status==="already_seen"?<p>You have already seen this variation. Ask your teacher for a fresh twin.</p>:<button className="button" disabled={busy} onClick={()=>void run(async()=>{
@@ -140,6 +143,6 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><p>{walkthrough}</p><p>Try the next independent problem when you are ready.</p></div>}
     {result && <div className="notice" role="status" style={{marginTop:16}}>{result}</div>}
     </div>}
-    <StudentSchedule courseId={courseId}/>
+    <StudentSchedule courseId={courseId} baselineReady={baselineReady} refreshKey={goalRefreshKey} onStartBlock={openPlannedConcept}/>
   </section>;
 }
