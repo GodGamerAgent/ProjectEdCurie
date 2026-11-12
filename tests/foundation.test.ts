@@ -403,6 +403,17 @@ describe("foundation access and onboarding", () => {
       const baseline=await request(app).post(`/api/courses/${course.id}/assessment/start`).set(as(actor));
       expect((await request(app).post(`/api/courses/${course.id}/assessment/submit`).set(as(actor)).send({sessionId:baseline.body.sessionId,answers:{[question.id]:"2"}})).status).toBe(201);
     }
+    vi.stubEnv("GROQ_API_KEY","isolated-test-key");
+    try{
+      vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({
+        explanation:"Addition combines quantities described in the course notes.",
+        citations:[{resourceId:resource.id,location:"Section 1"}],
+        checks:[{prompt:"What does addition combine?",options:["Quantities","Colors","Dates","Places"],correctOption:0,citations:[{resourceId:resource.id,location:"Section 1"}]}]
+      })}}]}),{status:200,headers:{"Content-Type":"application/json"}})));
+      const citedLesson=await request(app).post(`/api/concepts/${concept.id}/lesson`).set(as("student"));
+      expect(citedLesson.status).toBe(200);
+      expect(citedLesson.body.citations[0]).toMatchObject({resourceId:resource.id,location:"Section 1"});
+    }finally{vi.unstubAllGlobals();vi.unstubAllEnvs();}
     const first=await request(app).post(`/api/concepts/${concept.id}/practice`).set(as("student"));
     expect(first.body.prompt).toBe("2 + 3?");
     expect((await request(app).post(`/api/practice/${first.body.sessionId}/twin`).set(as("student"))).status).toBe(409);
