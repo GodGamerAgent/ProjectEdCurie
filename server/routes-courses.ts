@@ -1,7 +1,17 @@
 import { Router } from "express";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { HttpError } from "./auth";
 import { cleanString, courseAccess, currentUser, eligibility, normalizeEmail, requireRole, teacherCourse, uuid } from "./access";
+
+const BASELINE_COMPLETED = "Your baseline for this course was already submitted.";
+
+async function latestBaseline(db: Pool | PoolClient, userId: string, courseId: string) {
+  const result = await db.query(`SELECT b.score,b.total,b.details,b.created_at AS "createdAt"
+    FROM baseline_submissions b JOIN assessments a ON a.id=b.assessment_id
+    WHERE a.course_id=$1 AND b.user_id=$2 AND b.score IS NOT NULL
+    ORDER BY b.created_at DESC,b.id DESC LIMIT 1`, [courseId, userId]);
+  return result.rows[0] ?? null;
+}
 
 export function courseRoutes(db: Pool) {
   const router = Router();
@@ -68,17 +78,19 @@ export function courseRoutes(db: Pool) {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-      // Serialize concurrent starts for the same student and course.
+      // Serialize starts and submissions for the same student and course.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`baseline:${user.id}:${courseId}`]);
-      const active = await client.query(`SELECT id,questions,answers FROM assessment_sessions
+      const completed = await latestBaseline(client, user.id, courseId);
+      const active = completed ? null : await client.query(`SELECT id,questions,answers FROM assessment_sessions
         WHERE user_id=$1 AND course_id=$2 AND status='active'`, [user.id, courseId]);
-      if (active.rowCount) {
+      if (active?.rowCount) {
         const { id, questions, answers } = active.rows[0];
         await client.query("COMMIT");
         return res.json({ sessionId: id, questions: questions.map(({ id, prompt }: { id: string; prompt: string }) => ({ id, prompt })), answers });
       }
       const gate = await eligibility(client, courseId);
       if (!gate.assessmentId) throw new HttpError(403, gate.message);
+      if (completed) throw new HttpError(409, BASELINE_COMPLETED);
       const questions = await client.query(`SELECT q.id,q.prompt,q.answer,q.concept_id,q.version,q.resource_version_id FROM questions q JOIN resources r ON r.id=q.resource_id
         JOIN resource_versions rv ON rv.id=q.resource_version_id AND rv.resource_id=r.id
         WHERE q.assessment_id=$1 AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0
@@ -130,8 +142,10 @@ export function courseRoutes(db: Pool) {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`baseline:${user.id}:${req.params.id}`]);
       const locked=await client.query("SELECT status,score,total FROM assessment_sessions WHERE id=$1 AND user_id=$2 FOR UPDATE",[sessionId,user.id]);
       if(locked.rows[0].status==="submitted"){await client.query("COMMIT");return res.json({message:"Your baseline was already submitted.",score:locked.rows[0].score,total:locked.rows[0].total,details:[]});}
+      if (await latestBaseline(client, user.id, req.params.id)) throw new HttpError(409, BASELINE_COMPLETED);
       await client.query("INSERT INTO baseline_submissions (assessment_id,user_id,answers,score,total,details) VALUES ($1,$2,$3::jsonb,$4,$5,$6::jsonb)", [session.rows[0].assessment_id, user.id, JSON.stringify(answers), score, details.length, JSON.stringify(details)]);
       for (const item of details) if (item.conceptId) await client.query("INSERT INTO study_attempts (user_id,course_id,concept_id,kind,correct,assisted) SELECT $1,$2,id,'baseline',$4,false FROM concepts WHERE id=$3 AND course_id=$2", [user.id, req.params.id, item.conceptId, item.correct]);
       await client.query("UPDATE assessment_sessions SET status='submitted',answers=$2::jsonb,score=$3,total=$4,updated_at=now() WHERE id=$1",[sessionId,JSON.stringify(answers),score,details.length]);
@@ -141,8 +155,7 @@ export function courseRoutes(db: Pool) {
   });
   router.get("/api/courses/:id/assessment/result", async (req, res) => {
     const user = currentUser(res); requireRole(user, "student"); await courseAccess(db, user, req.params.id);
-    const result = await db.query(`SELECT b.score,b.total,b.details,b.created_at AS "createdAt" FROM baseline_submissions b JOIN assessments a ON a.id=b.assessment_id WHERE a.course_id=$1 AND b.user_id=$2 AND b.score IS NOT NULL ORDER BY b.created_at DESC LIMIT 1`, [req.params.id, user.id]);
-    res.json({ result: result.rows[0] ?? null });
+    res.json({ result: await latestBaseline(db, user.id, req.params.id) });
   });
   return router;
 }

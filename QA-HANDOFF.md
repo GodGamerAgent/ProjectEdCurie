@@ -4,6 +4,10 @@ Branch `claude/mvp-verification`, based on the Replit checkpoint `b2e87357046d5b
 
 Scope of this branch: new regression tests (`tests/qa-regression.test.ts`) and this file. No application code, schema, migrations, dependency manifests or deployment configuration were changed.
 
+## Integration result
+
+The report below records findings against the original Replit checkpoint. All five regression cases now pass on `codex/mvp-integration`. The prior integration fixes covered issues 1, 2, 4 and 5. The remaining fix blocks new baselines after a scored submission in the same course, including submissions from retake sessions opened before the fix. Completed results and same-session retries still work. The combined build and all 25 isolated tests passed on PostgreSQL 16 with mocked Groq. Real NST sign-in and live Groq remain to be verified in Replit.
+
 ## How this was verified
 
 - **Database isolation.** All database tests ran only through `npm run test:isolated`. That script runs `initdb` on a fresh temporary cluster on a random `127.0.0.1` port, creates `edcurie_test`, applies the checked-in migrations, runs the suite and deletes the cluster. `foundation.test.ts` refuses any other URL. `qa-regression.test.ts` applies the same guard. It then creates its own throwaway database (`edcurie_test_qa_<random>`) on that same cluster, applies the Drizzle migrations to it, and drops it afterwards. This lets it run in parallel with `foundation.test.ts`, which asserts empty tables. The shared development and production databases were never contacted, and no `DATABASE_URL` or `GROQ_API_KEY` was set in the environment.

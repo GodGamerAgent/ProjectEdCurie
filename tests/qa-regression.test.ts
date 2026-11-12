@@ -224,10 +224,10 @@ describe("QA: Groq failure handling (MOCKED provider, not a live call)", () => {
   });
 });
 
-describe("QA: confirmed defects (these fail until the application is fixed)", () => {
+describe("QA: study loop regressions", () => {
   it("does not let a student retake a submitted baseline and duplicate baseline evidence", async () => {
     const course = await makeCourse("Retake", ["peer"]);
-    await submitBaseline("peer", course.courseId, course.questionId, "wrong");
+    const completedId = await submitBaseline("peer", course.courseId, course.questionId, "wrong");
     const evidence = () => db.query(`SELECT (SELECT count(*) FROM baseline_submissions b JOIN assessments a ON a.id=b.assessment_id WHERE a.course_id=$1 AND b.user_id=$2) AS submissions,
       (SELECT count(*) FROM study_attempts WHERE course_id=$1 AND user_id=$2 AND kind='baseline') AS attempts`, [course.courseId, actors.peer.id]);
     const before = (await evidence()).rows[0];
@@ -238,6 +238,17 @@ describe("QA: confirmed defects (these fail until the application is fixed)", ()
         .send({ sessionId: retake.body.sessionId, answers: { [retake.body.questions[0].id]: "force" } });
     }
     expect((await evidence()).rows[0]).toEqual(before);
+    expect(retake.status).toBe(409);
+
+    // An active retake created before the upgrade must also be unable to submit.
+    const stale = await db.query(`INSERT INTO assessment_sessions(user_id,course_id,assessment_id,questions)
+      SELECT user_id,course_id,assessment_id,questions FROM assessment_sessions WHERE id=$1 RETURNING id`, [completedId]);
+    const staleSubmit = await request(app).post(`/api/courses/${course.courseId}/assessment/submit`).set(as("peer"))
+      .send({ sessionId: stale.rows[0].id, answers: { [course.questionId]: "force" } });
+    expect(staleSubmit.status).toBe(409);
+    expect((await evidence()).rows[0]).toEqual(before);
+    const result = await request(app).get(`/api/courses/${course.courseId}/assessment/result`).set(as("peer"));
+    expect(result.body.result).toMatchObject({ score: 0, total: 1 });
   });
 
   it("keeps hint use on a practice problem from being laundered into independent evidence via a second session", async () => {
