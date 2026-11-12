@@ -1,9 +1,10 @@
-import { ClerkProvider, Show, SignIn, SignUp, useAuth, useClerk } from "@clerk/react";
+import { ClerkProvider, Show, SignIn, useAuth, useClerk } from "@clerk/react";
 import { publishableKeyFromHost } from "@clerk/react/internal";
 import { FormEvent, MouseEvent, ReactNode, useCallback, useEffect, useState } from "react";
 import { Redirect as WouterRedirect, Route, Router as WouterRouter, Switch, useLocation } from "wouter";
 import { api, jsonBody } from "./api";
 import AdminWorkspace from "./AdminWorkspace";
+import SignupFieldHints from "./SignupFieldHints";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -116,13 +117,9 @@ function AuthPage({ kind }: { kind: "sign-in" | "sign-up" }) {
       <div className="eyebrow">EdCurie learning platform</div>
       <h1>{kind === "sign-in" ? "Welcome back." : "Join your institute."}</h1>
       <p className="muted">{kind === "sign-in" ? "Continue with your verified email account." : "Use a verified email. Institute members need an approved institute email."}</p>
-      {kind === "sign-up" && <div className="signup-guidance" aria-label="Sign-up tips">
-        <p><strong>Email:</strong> Enter a complete address, like name@example.com, that you can verify.</p>
-        <p><strong>Password:</strong> Use 15 or more characters. Select the password field to see its current requirements.</p>
-      </div>}
       {kind === "sign-in"
         ? <SignIn routing="path" path={routeUrl("/sign-in")} signUpUrl={routeUrl("/sign-up")} forceRedirectUrl={routeUrl("/app")} />
-        : <SignUp routing="path" path={routeUrl("/sign-up")} signInUrl={routeUrl("/sign-in")} forceRedirectUrl={routeUrl("/app")} />}
+        : <SignupFieldHints path={routeUrl("/sign-up")} signInUrl={routeUrl("/sign-in")} redirectUrl={routeUrl("/app")} />}
     </Panel>
   </main></div></Show></>;
 }
