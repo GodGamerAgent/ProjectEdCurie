@@ -42,3 +42,11 @@ For timetable setup, a teacher opens the course study workspace and adds a weekl
 ## Incremental handoff: teacher AI question drafts
 
 Apply additive migration `0030_teacher_ai_question_drafts.sql` to development before restarting this increment. It adds a private teacher draft table; it creates no academic records. AI drafting uses the existing server-only Groq configuration. An assigned teacher selects a concept in a draft assessment, reviews the quoted source and editable question/answer, then approves individual drafts before explicitly publishing the assessment. Tests use mocked Groq and disposable PostgreSQL; real provider and signed-in UI checks remain pending.
+
+## Published resource topics and AI practice
+
+Apply migration `0031_published_resource_practice.sql` in development before restarting Preview. It creates topics for existing usable published resources that have no linked concept. Future publication creates the topic in the same transaction. An uploaded PDF is saved as a draft, with its original file retained when extraction fails. Paste usable text and save edits before publishing an extraction failure.
+
+As an assigned teacher, upload a real PDF, review its extracted text, and publish the draft. As an enrolled student, reopen the course and select **Open concept**, then **Get lesson** or **AI practice**. Both are available before baseline completion. Baselines, teacher practice, reviews, and mocks retain their existing gates. Generated practice uses the configured Groq model, defaults to Qwen 3.8 27B, and shows a worked answer and source quote after submission. Generated questions are private and contribute practice evidence. Teacher-approved practice continues to drive XP and review cards.
+
+The isolated tests use a disposable PostgreSQL database and mocked provider replies. Verify the actual PDF and live Groq response in Preview.

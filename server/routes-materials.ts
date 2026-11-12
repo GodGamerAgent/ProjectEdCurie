@@ -39,15 +39,22 @@ export function materialRoutes(db: Pool) {
             const parser = new PDFParse({ data: req.file.buffer });
             try {
               const result = await parser.getText();
-              text = result.pages.map((page) => `[Page ${page.num}]\n${page.text.trim()}`).join("\n\n").trim();
-              if (!result.pages.some((page) => page.text.trim())) text = "";
+              text = result.pages.map((page) => `[Page ${page.num}]\n${page.text.replaceAll("\u0000", "").trim()}`).join("\n\n").trim();
+              if (!result.pages.some((page) => page.text.replaceAll("\u0000", "").trim())) text = "";
             } finally { await parser.destroy(); }
           } else text = new TextDecoder("utf-8", { fatal: true }).decode(req.file.buffer).trim();
           extraction = text ? "complete" : "error";
         } catch { extraction = "error"; }
       }
     } else if (!text) throw new HttpError(400, "Provide text or upload a PDF or text file.");
-    if (text.length > 500_000) throw new HttpError(400, "Extracted text is too long; provide a shorter excerpt.");
+    text = text.replaceAll("\u0000", "").trim();
+    if (text.length > 500_000) {
+      if (!req.file || extraction !== "complete") throw new HttpError(400, "Resource text is too long; provide a shorter excerpt.");
+      text = "";
+      extraction = "error";
+    }
+    if (!text && !req.file) throw new HttpError(400, "Provide usable resource text.");
+    if (!text) extraction = "error";
     const user=currentUser(res),client=await db.connect();
     try{
       await client.query("BEGIN");
@@ -80,10 +87,22 @@ export function materialRoutes(db: Pool) {
   router.post("/api/resources/:id/publish", async (req, res) => {
     const resource = await resourceById(db, req.params.id);
     await teacherCourse(db, currentUser(res), resource.course_id);
-    if (!resource.text.trim()) throw new HttpError(400, "Add usable text before publishing this resource.");
-    const client=await db.connect();
-    try{await client.query("BEGIN");await client.query("UPDATE resources SET status='published' WHERE id=$1",[resource.id]);await client.query("UPDATE resource_versions SET status='published' WHERE resource_id=$1 AND version=$2",[resource.id,resource.version]);await client.query("COMMIT");res.json({status:"published"});}
-    catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const current = (await client.query("SELECT title,text,version,course_id FROM resources WHERE id=$1 FOR UPDATE", [resource.id])).rows[0];
+      if (!current.text.trim()) throw new HttpError(400, "Add usable text before publishing this resource.");
+      await client.query("UPDATE resources SET status='published' WHERE id=$1", [resource.id]);
+      await client.query("UPDATE resource_versions SET status='published' WHERE resource_id=$1 AND version=$2", [resource.id,current.version]);
+      await client.query(`INSERT INTO concepts(course_id,name,resource_id)
+        SELECT $1,$2,$3 WHERE NOT EXISTS (SELECT 1 FROM concepts WHERE course_id=$1 AND resource_id=$3)`,
+        [current.course_id,current.title,resource.id]);
+      await client.query("COMMIT");
+      res.json({status:"published"});
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
   });
   router.post("/api/resources/:id/archive",async(req,res)=>{
     const resource=await resourceById(db,req.params.id);await teacherCourse(db,currentUser(res),resource.course_id);

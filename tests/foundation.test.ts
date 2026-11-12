@@ -824,4 +824,65 @@ describe("foundation access and onboarding", () => {
     } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
   });
 
+  it("opens a published PDF topic for enrolled students without requiring a baseline", async () => {
+    const teacher = as("teacher"), learner = as("outsider");
+    const course = (await request(app).post("/api/courses").set(teacher).send({title:"Published topic workflow"})).body;
+    await request(app).post(`/api/courses/${course.id}/enrollments`).set(teacher).send({email:actors.outsider.email});
+    const resource = await request(app).post(`/api/courses/${course.id}/resources`).set(teacher)
+      .field("title","Lab notes").attach("file",samplePdf(),{filename:"notes.pdf",contentType:"application/pdf"});
+    expect(resource.status).toBe(201);
+    expect(resource.body.text).toContain("Test lesson from page one.");
+    const topics = () => request(app).get(`/api/courses/${course.id}/concepts`).set(learner);
+    expect((await topics()).body.concepts).toEqual([]);
+    for (let n = 0; n < 2; n++) {
+      expect((await request(app).post(`/api/resources/${resource.body.id}/publish`).set(teacher)).status).toBe(200);
+    }
+    const visible = (await topics()).body.concepts;
+    expect(visible).toHaveLength(1);
+    const topic = visible[0];
+    expect(topic.name).toBe("Lab notes");
+    expect((await request(app).post(`/api/courses/${course.id}/assessment/start`).set(learner)).status).toBe(403);
+    const practiceUrl = `/api/concepts/${topic.id}/ai-practice`;
+    expect((await request(app).post(practiceUrl).set(as("student"))).status).toBe(403);
+    const q = {
+      prompt:"Which page is the lesson from?", options:["One","Two","Three","Four"], correctOption:0,
+      sourceQuote:"Test lesson from page one.", hints:["Read the source.","Look for the page number.","It is the first page."],
+      explanation:"The source identifies the lesson as coming from page one."
+    };
+    const provider = vi.fn(async (_url: string, options: RequestInit) => {
+      const body = JSON.parse(String(options.body));
+      expect(body.model).toBe("qwen/qwen3.8-27b");
+      expect(body.messages[1].content).toContain(q.sourceQuote);
+      const citation = {resourceId:resource.body.id,location:"Page 1"};
+      const output = body.messages[0].content.includes("Draft objective")
+        ? {questions:[q]}
+        : {explanation:q.explanation,citations:[citation],checks:[{...q,citations:[citation]}]};
+      return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(output)}}]}));
+    });
+    vi.stubEnv("GROQ_API_KEY","isolated-test-key");
+    vi.stubGlobal("fetch",provider);
+    try {
+      const lesson = await request(app).post(`/api/concepts/${topic.id}/lesson`).set(learner);
+      expect(lesson.status).toBe(200);
+      expect(lesson.body.citations[0].resourceId).toBe(resource.body.id);
+      const practice = await request(app).post(practiceUrl).set(learner);
+      expect(practice.status).toBe(201);
+      expect(practice.body.answer).toBeUndefined();
+      expect(practice.body.prompt).toContain("A. One");
+      const url = `/api/practice/${practice.body.sessionId}`;
+      expect((await request(app).post(url+"/hint").set(learner)).body.hint).toBe(q.hints[0]);
+      const resumed = await request(app).post(practiceUrl).set(learner);
+      expect(resumed.body.sessionId).toBe(practice.body.sessionId);
+      expect(resumed.body.hints).toEqual([q.hints[0]]);
+      expect(provider).toHaveBeenCalledTimes(2);
+      const answered = await request(app).post(url+"/answer").set(learner).send({answer:"A"});
+      expect(answered.body).toMatchObject({correct:true,assisted:true});
+      expect(answered.body.walkthrough).toContain(q.sourceQuote);
+      await request(app).post(`/api/resources/${resource.body.id}/archive`).set(teacher);
+      expect((await topics()).body.concepts).toEqual([]);
+      expect((await request(app).post(practiceUrl).set(learner)).status).toBe(404);
+      expect((await request(app).post(url+"/answer").set(learner).send({answer:"A"})).status).toBe(404);
+    } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
+
 });

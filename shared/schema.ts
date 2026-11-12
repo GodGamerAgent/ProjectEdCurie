@@ -182,8 +182,11 @@ export const studyGoals = pgTable("study_goals", {
 export const practiceProblems = pgTable("practice_problems", {
   id: uuid("id").defaultRandom().primaryKey(),
   conceptId: uuid("concept_id").notNull().references(() => concepts.id),
-  questionId: uuid("question_id").notNull().references(() => questions.id),
+  questionId: uuid("question_id").references(() => questions.id),
   questionVersionId: uuid("question_version_id").references(() => questionVersions.id),
+  generatedResourceVersionId: uuid("generated_resource_version_id").references(() => resourceVersions.id),
+  generatedSourceQuote: text("generated_source_quote"),
+  generatedExplanation: text("generated_explanation"),
   prompt: text("prompt").notNull(),
   answer: text("answer").notNull(),
   hints: jsonb("hints").$type<string[]>().notNull(),

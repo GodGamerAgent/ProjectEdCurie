@@ -223,7 +223,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
    const [lesson,setLesson]=useState<{id:string;format?:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
   const [lessonFeedback,setLessonFeedback]=useState<boolean|null>(null),[formatRecommendation,setFormatRecommendation]=useState<FormatRecommendation|null>(null);
   const [history,setHistory]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[];checks:LessonCheck[]}[]>([]);
-  const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string;kind?:string}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
+  const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string;kind?:string;generated?:boolean}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
   const voiceRef=useRef<any>(null);const [dictating,setDictating]=useState(false),[voiceError,setVoiceError]=useState("");
   const [followups,setFollowups]=useState<{originalSessionId:string;originalPrompt:string;conceptId:string;status:string}[]>([]);
   const [result,setResult]=useState("");const [walkthrough,setWalkthrough]=useState("");const [error,setError]=useState("");const [notice,setNotice]=useState("");const [busy,setBusy]=useState(false);
@@ -277,7 +277,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       </div>)}
     </div>}
     <p className="muted" style={{marginTop:20}}>Explanation format and hint style can be changed in Preferences.</p>
-     {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0} · Teacher-verified assignments {e?.verified_assignments||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setFocusSet(null);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Your teacher has not added concepts yet.</p>}
+     {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0} · Teacher-verified assignments {e?.verified_assignments||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setFocusSet(null);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Published course resources will appear here as topics.</p>}
     {selected && <div className="resource-card" style={{marginTop:18}}><h3>{concepts.find((x)=>x.id===selected)?.name}</h3>
     {plannedPhase&&<p className="notice">Scheduled phase: {plannedPhase}. Use the matching lesson or practice action below, then mark the session complete in your plan.</p>}
     {followups.filter(f=>f.conceptId===selected).map(f=><div className="notice" key={f.originalSessionId} style={{marginBottom:12}}>
@@ -289,18 +289,22 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     </div>)}
     {concepts.find((x)=>x.id===selected)?.prerequisites?.length?<p className="muted">Prerequisites: {concepts.find((x)=>x.id===selected)?.prerequisites?.map((p)=>p.name).join(", ")}</p>:<p className="muted">No prerequisite relationship is available.</p>}
     <div className="card-actions">
-      <button className="button primary" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{setLesson(await api(`/api/concepts/${selected}/lesson`,{method:"POST",body:jsonBody({format})}));setLessonFeedback(null);})}>Get lesson</button>
+      <button className="button primary" disabled={busy} onClick={()=>void run(async()=>{setLesson(await api(`/api/concepts/${selected}/lesson`,{method:"POST",body:jsonBody({format})}));setLessonFeedback(null);})}>Get lesson</button>
+      <button className="button" disabled={busy} onClick={()=>void run(async()=>{
+        const next=await api<{sessionId:string;prompt:string;hints:string[];generated:true}>(`/api/concepts/${selected}/ai-practice`,{method:"POST"});
+        setFocusSet(null);setSession(next);setHints(next.hints);setAnswer("");setResult("");setWalkthrough("");
+      })}>AI practice</button>
       <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{
         const inSet=focusSet?.conceptId===selected;
         const next=await api<{sessionId:string;prompt:string;hints:string[]}>(`/api/concepts/${selected}/practice`,{method:"POST"});
         setSession(next);setAnswer("");setHints(next.hints);setResult("");setWalkthrough("");
         if(inSet&&next.sessionId===session?.sessionId)return;
         if(inSet&&focusSet.started<focusSet.total)setFocusSet({...focusSet,started:focusSet.started+1});else setFocusSet(null);
-      })}>{result&&focusSet?.conceptId===selected&&focusSet.started<focusSet.total?`Next focus question · ${focusSet.total-focusSet.started} left`:result&&focusSet?.conceptId===selected?"Start another independent question":result?"Next independent problem":focusSet?.conceptId===selected?`Focused set · ${focusSet.started} of ${focusSet.total}`:"Practice question"}</button>
-      <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{const data=await api<{lessons:typeof history}>(`/api/concepts/${selected}/lessons`);setHistory(data.lessons);})}>Previous lessons</button>
+      })}>{result&&focusSet?.conceptId===selected&&focusSet.started<focusSet.total?`Next focus question · ${focusSet.total-focusSet.started} left`:result&&focusSet?.conceptId===selected?"Start another independent question":result?"Next independent problem":focusSet?.conceptId===selected?`Focused set · ${focusSet.started} of ${focusSet.total}`:"Teacher practice"}</button>
+      <button className="button" disabled={busy} onClick={()=>void run(async()=>{const data=await api<{lessons:typeof history}>(`/api/concepts/${selected}/lessons`);setHistory(data.lessons);})}>Previous lessons</button>
     </div>
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>
-    {!baselineReady&&<p className="muted">Complete the course baseline to unlock lessons and practice. Your goal and availability can be saved now.</p>}
+    {!baselineReady&&<p className="muted">You can learn and practice with AI now. Complete the baseline when available to unlock teacher practice, reviews, and mocks.</p>}
      {lesson && <div style={{marginTop:16}}><button className="button small" type="button" onClick={speakLesson}>Read lesson aloud</button>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}<p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p>
        <div className="course-card"><strong>Was this {lesson.format||"requested"} explanation helpful?</strong><div className="card-actions"><button className="button small" type="button" disabled={busy} aria-pressed={lessonFeedback===true} onClick={()=>void run(async()=>{await api(`/api/lessons/${lesson.id}/feedback`,{method:"POST",body:jsonBody({helpful:true})});setLessonFeedback(true);setFormatRecommendation((await api<{recommendation:FormatRecommendation|null}>(`/api/courses/${courseId}/format-recommendation`)).recommendation);})}>Helpful</button><button className="button small" type="button" disabled={busy} aria-pressed={lessonFeedback===false} onClick={()=>void run(async()=>{await api(`/api/lessons/${lesson.id}/feedback`,{method:"POST",body:jsonBody({helpful:false})});setLessonFeedback(false);setFormatRecommendation((await api<{recommendation:FormatRecommendation|null}>(`/api/courses/${courseId}/format-recommendation`)).recommendation);})}>Not helpful</button></div>
          {lessonFeedback!==null&&<p className="muted" role="status">Feedback saved.</p>}
@@ -311,7 +315,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       <div aria-label="Lesson comprehension checks">{lesson.checks.map(check=><LessonCheckView key={check.id} lessonId={lesson.id} check={check} run={run}/>)}</div></div>}
     {history.map((item)=><div key={item.id} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span>
       {item.checks.map(check=><LessonCheckView key={check.id} lessonId={item.id} check={check} run={run}/>)}</div>)}
-      {session && <div style={{marginTop:18}}><h3>{session.kind==="twin"?"Linked twin question":session.concept ? `Prerequisite check: ${session.concept}` : "Teacher-approved practice"}</h3><p>{session.prompt}</p>
+      {session && <div style={{marginTop:18}}><h3>{session.kind==="twin"?"Linked twin question":session.concept ? `Prerequisite check: ${session.concept}` : session.generated ? "AI practice" : "Teacher-approved practice"}</h3><p style={{whiteSpace:"pre-wrap"}}>{session.prompt}</p>
       {session.kind==="twin"&&<p className="muted">Answer without hints for independent evidence. Using any hint records this attempt as assisted instead.</p>}
       {hints.map((hint,i)=><p key={i}><strong>Hint {i+1}:</strong> {hint}</p>)}
       {!session.concept && <button className="button small" disabled={busy||hints.length>=3} onClick={()=>void run(async()=>{const r=await api<{hint:string}>(`/api/practice/${session.sessionId}/hint`,{method:"POST"});setHints((old)=>[...old,r.hint]);})}>Get next hint</button>}
@@ -319,7 +323,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
         <div className="field"><label htmlFor="practice-answer">Your answer</label><input id="practice-answer" required value={answer} onChange={(e)=>setAnswer(e.target.value)}/></div>
         <div className="card-actions"><button className="button small" type="button" onClick={dictateAnswer}>{dictating?"Stop dictation":"Dictate answer"}</button><button className="button primary small" disabled={busy}>Submit answer</button></div>
         <p className="muted">Voice dictation uses your browser's speech recognition. Review the transcript before submitting.</p>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}</form></div>}
-      {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><p>{walkthrough}</p><p>Try the next independent problem when you are ready.</p></div>}
+      {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><p style={{whiteSpace:"pre-wrap"}}>{walkthrough}</p><p>Try the next independent problem when you are ready.</p></div>}
     {result && <div className="notice" role="status" style={{marginTop:16}}>{result}</div>}
     </div>}
     <StudentSchedule courseId={courseId} baselineReady={baselineReady} refreshKey={goalRefreshKey} onStartBlock={openPlannedConcept}/>
