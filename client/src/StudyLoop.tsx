@@ -1,3 +1,4 @@
+import Markdown from "./Markdown";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, jsonBody } from "./api";
 import TwinLinker from "./TwinLinker";
@@ -18,19 +19,19 @@ function LessonCheckView({lessonId,check,run}:{lessonId:string;check:LessonCheck
   const [selected,setSelected]=useState<number|null>(check.selectedOption??null);
   const [result,setResult]=useState<{correct:boolean;correctOption:number;message:string}|null>(
     check.answered&&check.correct!==null&&check.correctOption!==null?{correct:check.correct!,correctOption:check.correctOption!,message:check.correct?"Correct. This check is recorded as assisted comprehension evidence.":"Not quite. Review the explanation and cited course material."}:null);
-  return <div className="course-card" style={{marginTop:12}}><strong>Check your understanding</strong><p>{check.prompt}</p>
+  return <div className="course-card" style={{marginTop:12}}><strong>Check your understanding</strong><Markdown text={check.prompt} />
     {check.citations.map((cite,index)=><p key={index} className="muted">Source: {cite.title||"Course material"} · {cite.location}</p>)}
     <fieldset disabled={Boolean(result)} style={{border:0,padding:0,margin:0}}>
       <legend className="sr-only">Choose an answer</legend>
       {check.options.map((option,index)=><label key={index} className="row" style={{justifyContent:"flex-start",gap:10,margin:"8px 0"}}>
-        <input type="radio" name={`check-${check.id}`} checked={selected===index} onChange={()=>setSelected(index)}/><span>{option}</span>
+        <input type="radio" name={`check-${check.id}`} checked={selected===index} onChange={()=>setSelected(index)}/><Markdown text={option} compact />
       </label>)}
     </fieldset>
     {!result?<button className="button small" type="button" disabled={selected===null} onClick={()=>run(async()=>{
       const response=await api<{correct:boolean;correctOption:number;message:string}>(`/api/lessons/${lessonId}/checks/${check.id}/answer`,{method:"POST",body:jsonBody({selectedOption:selected})});
       setResult(response);
     })}>Submit check</button>:<div className="notice" role="status" style={{marginTop:10}}>
-      <p>{result.message}</p><p>Answer: {check.options[result.correctOption]}</p>
+      <p>{result.message}</p><p>Answer: <Markdown text={check.options[result.correctOption]} compact /></p>
     </div>}
   </div>;
 }
@@ -50,7 +51,7 @@ function ReviewVault({courseId,baselineReady,refreshKey}:{courseId:string|number
         <div><strong>{card.conceptName}</strong><p>{card.due?"Due now":`Next review ${new Date(card.dueAt).toLocaleString()}`}</p></div>
         <button className="button small" disabled={busy||!card.due} onClick={()=>void act(async()=>{const next=await api<{sessionId:string;prompt:string}>(`/api/review-cards/${card.id}/start`,{method:"POST"});setSession(next);setAnswer("");setResult(null);})}>Review</button>
       </div>)}</div>}
-    {session&&<div className="resource-card" style={{marginTop:16}}><h4>Recall before revealing</h4><p>{session.prompt}</p>
+    {session&&<div className="resource-card" style={{marginTop:16}}><h4>Recall before revealing</h4><Markdown text={session.prompt} />
       {!result?<form onSubmit={e=>{e.preventDefault();void act(async()=>{const data=await api<typeof result>(`/api/review-sessions/${session.sessionId}/answer`,{method:"POST",body:jsonBody({answer})});if(data){setResult(data);await load();}});}}>
         <div className="field"><label htmlFor="review-answer">Your answer</label><input id="review-answer" required value={answer} onChange={e=>setAnswer(e.target.value)}/></div>
         <button className="button primary small" disabled={busy} style={{marginTop:10}}>Submit recall</button>
@@ -109,7 +110,7 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
         <p>{timeExpired?"View the result for the answers you saved.":"Save each answer as you go. The timer keeps running if you leave or refresh."}</p>
       </div>}
       {mock.questions.map((q,i)=><div className="course-card" key={q.id}>
-      <div className="eyebrow">Question {i+1} · {q.conceptName} · challenge {q.difficulty}/5</div><p>{q.prompt}</p><p className="muted">Source: {q.sourceTitle} · {q.sourceLocation}</p>
+      <div className="eyebrow">Question {i+1} · {q.conceptName} · challenge {q.difficulty}/5</div><Markdown text={q.prompt} /><p className="muted">Source: {q.sourceTitle} · {q.sourceLocation}</p>
       <div className="field"><label htmlFor={`mock-${q.id}`}>Your answer</label><input id={`mock-${q.id}`} disabled={busy||timeExpired} value={draft[q.id]??mock.answers[q.id]??""} onChange={e=>setDraft({...draft,[q.id]:e.target.value})}/></div>
       <button className="button small" disabled={busy||timeExpired||!String(draft[q.id]??mock.answers[q.id]??"").trim()} onClick={()=>void act(async()=>{
         const answer=draft[q.id]??mock.answers[q.id];await api(`/api/mock-sessions/${mock.id}/answer`,{method:"POST",body:jsonBody({questionId:q.id,answer})});
@@ -126,7 +127,7 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
     {mock?.status==="completed"&&mock.result&&<div className="course-card" style={{marginTop:16}}><strong>Mock result: {mock.result.score}%</strong><p>{mock.result.correctCount} of {mock.result.questionCount} correct. Mastery evidence was not changed.</p>
        {mock.result.timeExpired&&<p>{mock.result.message}</p>}
        {mock.teacherReview&&<div className="notice" role="status"><strong>Teacher feedback</strong><p>{mock.teacherReview}</p></div>}
-       {mock.result.details.map((d,i)=><div key={d.questionId} className="notice" style={{marginTop:10}}><strong>Question {i+1} · {d.correct?"Correct":"Review"}</strong><p>{d.prompt}</p><p>Your answer: {d.answer||"Unanswered"}</p><p>Expected answer: {d.expectedAnswer}</p></div>)}
+       {mock.result.details.map((d,i)=><div key={d.questionId} className="notice" style={{marginTop:10}}><strong>Question {i+1} · {d.correct?"Correct":"Review"}</strong><Markdown text={d.prompt} /><p>Your answer: {d.answer||"Unanswered"}</p><p>Expected answer: {d.expectedAnswer}</p></div>)}
     </div>}
   </section>;
 }
@@ -305,25 +306,25 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     </div>
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>
     {!baselineReady&&<p className="muted">You can learn and practice with AI now. Complete the baseline when available to unlock teacher practice, reviews, and mocks.</p>}
-     {lesson && <div style={{marginTop:16}}><button className="button small" type="button" onClick={speakLesson}>Read lesson aloud</button>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}<p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p>
+     {lesson && <div style={{marginTop:16}}><button className="button small" type="button" onClick={speakLesson}>Read lesson aloud</button>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}<Markdown text={lesson.explanation} />
        <div className="course-card"><strong>Was this {lesson.format||"requested"} explanation helpful?</strong><div className="card-actions"><button className="button small" type="button" disabled={busy} aria-pressed={lessonFeedback===true} onClick={()=>void run(async()=>{await api(`/api/lessons/${lesson.id}/feedback`,{method:"POST",body:jsonBody({helpful:true})});setLessonFeedback(true);setFormatRecommendation((await api<{recommendation:FormatRecommendation|null}>(`/api/courses/${courseId}/format-recommendation`)).recommendation);})}>Helpful</button><button className="button small" type="button" disabled={busy} aria-pressed={lessonFeedback===false} onClick={()=>void run(async()=>{await api(`/api/lessons/${lesson.id}/feedback`,{method:"POST",body:jsonBody({helpful:false})});setLessonFeedback(false);setFormatRecommendation((await api<{recommendation:FormatRecommendation|null}>(`/api/courses/${courseId}/format-recommendation`)).recommendation);})}>Not helpful</button></div>
          {lessonFeedback!==null&&<p className="muted" role="status">Feedback saved.</p>}
          {formatRecommendation&&<p className="muted">Your feedback suggests trying <strong>{formatRecommendation.format.replaceAll("_"," ")}</strong> next ({formatRecommendation.helpful}/{formatRecommendation.ratings} helpful ratings).</p>}
        </div><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
-      {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p></div>}
+      {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><Markdown text={source.text} /></div>}
        <TutorConversation lessonId={lesson.id}/>
       <div aria-label="Lesson comprehension checks">{lesson.checks.map(check=><LessonCheckView key={check.id} lessonId={lesson.id} check={check} run={run}/>)}</div></div>}
-    {history.map((item)=><div key={item.id} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span>
+    {history.map((item)=><div key={item.id} className="notice" style={{marginTop:12}}><Markdown text={item.explanation} /><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span>
       {item.checks.map(check=><LessonCheckView key={check.id} lessonId={item.id} check={check} run={run}/>)}</div>)}
-      {session && <div style={{marginTop:18}}><h3>{session.kind==="twin"?"Linked twin question":session.concept ? `Prerequisite check: ${session.concept}` : session.generated ? "AI practice" : "Teacher-approved practice"}</h3><p style={{whiteSpace:"pre-wrap"}}>{session.prompt}</p>
+      {session && <div style={{marginTop:18}}><h3>{session.kind==="twin"?"Linked twin question":session.concept ? `Prerequisite check: ${session.concept}` : session.generated ? "AI practice" : "Teacher-approved practice"}</h3><Markdown text={session.prompt} />
       {session.kind==="twin"&&<p className="muted">Answer without hints for independent evidence. Using any hint records this attempt as assisted instead.</p>}
-      {hints.map((hint,i)=><p key={i}><strong>Hint {i+1}:</strong> {hint}</p>)}
+      {hints.map((hint,i)=><div key={i}><strong>Hint {i+1}</strong><Markdown text={hint} /></div>)}
       {!session.concept && <button className="button small" disabled={busy||hints.length>=3} onClick={()=>void run(async()=>{const r=await api<{hint:string}>(`/api/practice/${session.sessionId}/hint`,{method:"POST"});setHints((old)=>[...old,r.hint]);})}>Get next hint</button>}
       <form onSubmit={(e)=>{e.preventDefault();void run(async()=>{const r=await api<{message:string;walkthrough:string|null;diagnostic:{sessionId:string;prompt:string;concept:string}|null}>(`/api/practice/${session.sessionId}/answer`,{method:"POST",body:jsonBody({answer})});setResult(r.message);setWalkthrough(r.walkthrough||"");setAnswer("");setHints([]);setSession(r.diagnostic);setReviewRefreshKey(x=>x+1);await refresh();});}} style={{marginTop:12}}>
         <div className="field"><label htmlFor="practice-answer">Your answer</label><input id="practice-answer" required value={answer} onChange={(e)=>setAnswer(e.target.value)}/></div>
         <div className="card-actions"><button className="button small" type="button" onClick={dictateAnswer}>{dictating?"Stop dictation":"Dictate answer"}</button><button className="button primary small" disabled={busy}>Submit answer</button></div>
         <p className="muted">Voice dictation uses your browser's speech recognition. Review the transcript before submitting.</p>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}</form></div>}
-      {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><p style={{whiteSpace:"pre-wrap"}}>{walkthrough}</p><p>Try the next independent problem when you are ready.</p></div>}
+      {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><Markdown text={walkthrough} /><p>Try the next independent problem when you are ready.</p></div>}
     {result && <div className="notice" role="status" style={{marginTop:16}}>{result}</div>}
     </div>}
     <StudentSchedule courseId={courseId} baselineReady={baselineReady} refreshKey={goalRefreshKey} onStartBlock={openPlannedConcept}/>

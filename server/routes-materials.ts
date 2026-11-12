@@ -6,7 +6,7 @@ import { HttpError } from "./auth";
 import { cleanString, courseAccess, currentUser, teacherCourse, uuid } from "./access";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
-const databaseText = (value: unknown) => typeof value === "string" ? value.replaceAll("\u0000", "").trim() : "";
+const databaseText = (value: unknown) => typeof value === "string" ? value.replaceAll("\u0000", "") : "";
 
 async function resourceById(db: Pool, id: string) {
   uuid(id);
@@ -28,41 +28,42 @@ export function materialRoutes(db: Pool) {
     const title = cleanString(databaseText(req.body.title), "Resource title", 200);
     let text = databaseText(req.body.text);
     if (text.length > 500_000) throw new HttpError(400, "Resource text is too long.");
-    let extraction = text ? "manual" : "pending";
+    let extraction = text.trim() ? "manual" : "pending";
     let mime: string | null = null;
     if (req.file) {
       const isPdf = req.file.buffer.subarray(0, 5).toString() === "%PDF-";
-      const isText = req.file.mimetype === "text/plain" && !req.file.buffer.includes(0);
-      if (!isPdf && !isText) throw new HttpError(400, "Upload a PDF or plain text file.");
-      mime = isPdf ? "application/pdf" : "text/plain";
-      if (!text) {
+      const isMarkdown = /\.(md|markdown)$/i.test(req.file.originalname) &&
+        ["text/markdown", "text/plain", "application/octet-stream"].includes(req.file.mimetype);
+      const isText = (isMarkdown || req.file.mimetype === "text/plain") && !req.file.buffer.includes(0);
+      if (!isPdf && !isText) throw new HttpError(400, "Upload a PDF, Markdown, or plain text file.");
+      mime = isPdf ? "application/pdf" : isMarkdown ? "text/markdown; charset=utf-8" : "text/plain";
+      if (!text.trim()) {
         try {
           if (isPdf) {
             const parser = new PDFParse({ data: req.file.buffer });
             try {
               const result = await parser.getText();
-              text = result.pages.map((page) => `[Page ${page.num}]\n${databaseText(page.text)}`).join("\n\n").trim();
-              if (!result.pages.some((page) => databaseText(page.text))) text = "";
+              text = result.pages.map((page) => `[Page ${page.num}]\n${databaseText(page.text).trim()}`).join("\n\n").trim();
+              if (!result.pages.some((page) => databaseText(page.text).trim())) text = "";
             } finally { await parser.destroy(); }
-          } else text = new TextDecoder("utf-8", { fatal: true }).decode(req.file.buffer).trim();
-          extraction = text ? "complete" : "error";
+          } else text = new TextDecoder("utf-8", { fatal: true }).decode(req.file.buffer);
+          extraction = text.trim() ? "complete" : "error";
         } catch { extraction = "error"; }
       }
-    } else if (!text) throw new HttpError(400, "Provide text or upload a PDF or text file.");
+    } else if (!text.trim()) throw new HttpError(400, "Provide text or upload a PDF or text file.");
     text = databaseText(text);
     if (text.length > 500_000) {
       if (!req.file || extraction !== "complete") throw new HttpError(400, "Resource text is too long; provide a shorter excerpt.");
       text = "";
       extraction = "error";
     }
-    if (!text && !req.file) throw new HttpError(400, "Provide usable resource text.");
-    if (!text) extraction = "error";
+    if (!text.trim()) { text = ""; extraction = "error"; }
     const user=currentUser(res),client=await db.connect();
     try{
       await client.query("BEGIN");
       const result = await client.query(`INSERT INTO resources (course_id,title,text,extraction_status,file_name,mime_type,file_data)
         VALUES ($1,$2,$3,$4,$5,$6,decode($7,'base64')) RETURNING id,title,status,extraction_status AS "extractionStatus",text,version`,
-        [req.params.id, title, text, extraction, databaseText(req.file?.originalname) || null, mime, req.file?.buffer.toString("base64") ?? null]);
+        [req.params.id, title, text, extraction, databaseText(req.file?.originalname).trim() || null, mime, req.file?.buffer.toString("base64") ?? null]);
       const resource=result.rows[0];
       await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by)
         SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2 FROM resources WHERE id=$1`, [resource.id,user.id]);
@@ -73,7 +74,8 @@ export function materialRoutes(db: Pool) {
     const resource = await resourceById(db, req.params.id);
     await teacherCourse(db, currentUser(res), resource.course_id);
     const title = cleanString(databaseText(req.body.title), "Resource title", 200);
-    const text = cleanString(databaseText(req.body.text), "Resource text", 500_000);
+    const text = databaseText(req.body.text);
+    if (!text.trim() || text.length > 500_000) throw new HttpError(400, "Resource text is required and must be at most 500000 characters.");
     const user=currentUser(res),client=await db.connect();
     try{
       await client.query("BEGIN");
@@ -115,6 +117,14 @@ export function materialRoutes(db: Pool) {
     const versions=await db.query(`SELECT id,version,title,status,extraction_status AS "extractionStatus",created_at AS "createdAt"
       FROM resource_versions WHERE resource_id=$1 ORDER BY version DESC`,[resource.id]);
     res.json({versions:versions.rows});
+  });
+  router.get("/api/resources/:id/versions/:versionId", async (req, res) => {
+    const resource = await resourceById(db, req.params.id);
+    await teacherCourse(db, currentUser(res), resource.course_id);
+    const version = await db.query("SELECT title,version,text FROM resource_versions WHERE id=$1 AND resource_id=$2",
+      [uuid(req.params.versionId),resource.id]);
+    if (!version.rowCount) throw new HttpError(404, "Resource version not found.");
+    res.json(version.rows[0]);
   });
   router.get("/api/resources/:id/file", async (req, res) => {
     const resource = await resourceById(db, req.params.id);

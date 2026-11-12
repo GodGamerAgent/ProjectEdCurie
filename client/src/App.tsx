@@ -1,3 +1,5 @@
+import ResourceReview from "./ResourceReview";
+import Markdown from "./Markdown";
 import { ClerkProvider, Show, SignIn, useAuth, useClerk } from "@clerk/react";
 import { publishableKeyFromHost } from "@clerk/react/internal";
 import { FormEvent, MouseEvent, ReactNode, useCallback, useEffect, useState } from "react";
@@ -255,15 +257,15 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
     <form className="form-grid" onSubmit={enroll}><div className="field"><label htmlFor="enroll-email">Student email</label><input id="enroll-email" type="email" required value={enrollEmail} onChange={(e) => setEnrollEmail(e.target.value)} /></div><div className="field" style={{ alignSelf: "end" }}><button className="button primary" disabled={busy}>Enroll student</button></div></form>
     {detail.enrollments.length ? <div className="stack" style={{ marginTop: 13 }}>{detail.enrollments.map((entry) => <div className="course-card row" key={entry.email}>{entry.email}<span className="badge">Enrolled</span></div>)}</div> : <div className="empty" style={{ marginTop: 14 }}><span className="empty-mark">01</span><h3>No students enrolled</h3><p>Enrollment is required before a student can open this course.</p></div>}
     <div className="divider" />
-    <h3>Course resources</h3><p className="muted">Add a PDF or text file, or paste course material. Review and publish when ready.</p>
+    <h3>Course resources</h3><p className="muted">Add a PDF, Markdown, or text file, or paste course material. Review and publish when ready.</p>
     <form className="form-grid" onSubmit={upload}>
       <div className="field"><label htmlFor="resource-title">Resource title</label><input id="resource-title" required value={resourceTitle} onChange={(e) => setResourceTitle(e.target.value)} /></div>
-      <div className="field"><label htmlFor="resource-file">Optional PDF or text file</label><input id="resource-file" type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => setResourceFile(e.target.files?.[0] || null)} /></div>
+      <div className="field"><label htmlFor="resource-file">Optional PDF, Markdown, or text file</label><input id="resource-file" type="file" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain" onChange={(e) => setResourceFile(e.target.files?.[0] || null)} /></div>
       <div className="field full"><label htmlFor="resource-text">Resource text or excerpt</label><textarea id="resource-text" value={resourceText} onChange={(e) => setResourceText(e.target.value)} placeholder="Paste source material or a reviewable excerpt" /></div>
       <div className="field"><button className="button primary" disabled={busy}>Save resource draft</button></div>
     </form>
     <div className="stack" style={{ marginTop: 17 }}>
-      {detail.resources.length ? detail.resources.map((resource) => <ResourceEditor key={resource.id} resource={resource} busy={busy} onEdit={(titleValue, text) => run(() => api(`/api/resources/${resource.id}`, { method: "PATCH", body: jsonBody({ title: titleValue, text }) }), "A new resource version was saved as a draft.")} onPublish={() => run(() => api(`/api/resources/${resource.id}/publish`, { method: "POST" }), "Resource published.")} onArchive={()=>{if(window.confirm("Archive this resource? Students will no longer start new work from it."))void run(()=>api(`/api/resources/${resource.id}/archive`,{method:"POST"}),"Resource archived.");}} />) : <div className="empty"><span className="empty-mark">02</span><h3>No course resources</h3><p>Course materials added above will be listed here for review.</p></div>}
+      {detail.resources.length ? detail.resources.map((resource) => <ResourceEditor key={resource.id} resource={resource} busy={busy} refresh={refresh} onPublish={() => run(() => api(`/api/resources/${resource.id}/publish`, { method: "POST" }), "Resource published.")} onArchive={()=>{if(window.confirm("Archive this resource? Students will no longer start new work from it."))void run(()=>api(`/api/resources/${resource.id}/archive`,{method:"POST"}),"Resource archived.");}} />) : <div className="empty"><span className="empty-mark">02</span><h3>No course resources</h3><p>Course materials added above will be listed here for review.</p></div>}
     </div>
     <div className="divider" />
     <h3>Baseline assessment</h3><p className="muted">Create questions tied to resources, then publish the assessment when it is ready.</p>
@@ -299,29 +301,108 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
   </div>;
 }
 
-function ResourceEditor({ resource, busy, onEdit, onPublish,onArchive }: { resource: Resource; busy: boolean; onEdit: (title: string, text: string) => void; onPublish: () => void;onArchive:()=>void }) {
+function ResourceEditor({ resource, busy, refresh, onPublish, onArchive }: {
+  resource: Resource;
+  busy: boolean;
+  refresh: () => Promise<void>;
+  onPublish: () => void;
+  onArchive: () => void;
+}) {
   const [title, setTitle] = useState(resource.title);
   const [text, setText] = useState(resource.text || "");
-  const [versions,setVersions]=useState<{id:string;version:number;title:string;status:string;createdAt:string}[]>([]);
-  const [preview,setPreview]=useState<{title:string;version:number;text:string}|null>(null);
-  const [versionError,setVersionError]=useState("");
-  const published = resource.status.toLowerCase() === "published";
-  useEffect(() => { setTitle(resource.title); setText(resource.text || ""); }, [resource.title, resource.text]);
-  async function loadVersions(){setVersionError("");try{const data=await api<{versions:typeof versions}>(`/api/resources/${resource.id}/versions`);setVersions(data.versions);}catch(e){setVersionError(e instanceof Error?e.message:"Could not load version history.");}}
-  async function openVersion(version:{id:string;version:number;title:string}){setVersionError("");try{const data=await api<{text:string;location:string}>(`/api/resources/${resource.id}/excerpt?version=${version.id}&location=Section%201`);setPreview({title:version.title,version:version.version,text:data.text});}catch(e){setVersionError(e instanceof Error?e.message:"Could not open this version.");}}
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [versions, setVersions] = useState<{ id: string; version: number; title: string; status: string }[]>([]);
+  const [preview, setPreview] = useState<{ title: string; version: number; text: string } | null>(null);
+  const [error, setError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
+  const published = resource.status === "published";
+  const changed = title !== resource.title || text !== (resource.text || "");
+
+  useEffect(() => {
+    setTitle(resource.title);
+    setText(resource.text || "");
+  }, [resource.title, resource.text, resource.version]);
+
+  async function loadVersions() {
+    setError("");
+    try {
+      const data = await api<{ versions: typeof versions }>(`/api/resources/${resource.id}/versions`);
+      setVersions(data.versions);
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not load version history."); }
+  }
+
+  async function openVersion(versionId: string) {
+    setError("");
+    try {
+      setPreview(await api(`/api/resources/${resource.id}/versions/${versionId}`));
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not open this version."); }
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setSaveMessage("");
+    try {
+      await api(`/api/resources/${resource.id}`, { method: "PATCH", body: jsonBody({ title, text }) });
+      await refresh();
+      if (versions.length) await loadVersions();
+      setSaveMessage("Edits saved as a new draft.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save edits.");
+    } finally { setSaving(false); }
+  }
+
   return <article className="resource-card">
-    <div className="row"><div><h3>{resource.title}</h3><div className="card-actions" style={{ margin: 0 }}><span className={`badge ${published ? "green" : "amber"}`}>{resource.status}</span><span className="badge">Version {resource.version||1}</span>{resource.extractionStatus && <span className="badge">Extraction: {resource.extractionStatus}</span>}</div></div>
+    <div className="row">
+      <div><h3>{resource.title}</h3><div className="card-actions">
+        <span className={`badge ${published ? "green" : "amber"}`}>{resource.status}</span>
+        <span className="badge">Version {resource.version || 1}</span>
+        {resource.extractionStatus && <span className="badge">Extraction: {resource.extractionStatus}</span>}
+      </div></div>
       {resource.hasFile && <a className="button small" href={`/api/resources/${resource.id}/file`} target="_blank" rel="noreferrer">Open original</a>}
     </div>
-    <button className="button small" type="button" style={{marginTop:12}} onClick={()=>void loadVersions()}>Version history</button>
-    {versionError&&<div className="notice error" role="alert">{versionError}</div>}
-    {!!versions.length&&<div className="stack" style={{marginTop:10}}>{versions.map((v)=><div key={v.id} className="row"><span>v{v.version} · {v.status} · {v.title}</span><button className="button small" type="button" onClick={()=>void openVersion(v)}>Preview</button></div>)}</div>}
-    {preview&&<div className="notice" role="region" aria-label="Resource version preview"><strong>{preview.title} · v{preview.version}</strong><p style={{whiteSpace:"pre-wrap"}}>{preview.text}</p></div>}
-    {!published ? <><div className="form-grid" style={{ marginTop: 14 }}>
-      <div className="field"><label htmlFor={`resource-edit-title-${resource.id}`}>Title</label><input id={`resource-edit-title-${resource.id}`} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-      <div className="field full"><label htmlFor={`resource-edit-text-${resource.id}`}>Review or add text</label><textarea id={`resource-edit-text-${resource.id}`} value={text} onChange={(e) => setText(e.target.value)} /></div>
-    </div><div className="form-actions"><button className="button small" disabled={busy} onClick={() => onEdit(title, text)}>Save edits</button><button className="button small success" disabled={busy} onClick={onPublish}>Publish resource</button></div></> :
-      <><p style={{ marginTop: 14 }}>{text || "Published source material is available to enrolled students."}</p><button className="button small" type="button" disabled={busy} onClick={onArchive}>Archive resource</button></>}
+    <div className="card-actions">
+      <button className="button small primary" type="button" onClick={() => { setError(""); setEditing(true); }}>Review and edit</button>
+      <button className="button small" type="button" onClick={() => void loadVersions()}>Version history</button>
+      {published ? <button className="button small" type="button" disabled={busy || saving} onClick={onArchive}>Archive resource</button>
+        : <button className="button small success" type="button" disabled={busy || saving || changed || !resource.text?.trim()} onClick={onPublish}>Publish resource</button>}
+    </div>
+    {changed && !editing && <p className="muted">You have unsaved edits. Reopen the review to save them.</p>}
+    {error && !editing && <p className="notice error" role="alert">{error}</p>}
+    {versions.length > 0 && <div className="stack" style={{marginTop:10}}>
+      {versions.map(version => <div key={version.id} className="row">
+        <span>v{version.version} · {version.status} · {version.title}</span>
+        <button className="button small" type="button" onClick={() => void openVersion(version.id)}>Preview version {version.version}</button>
+      </div>)}
+    </div>}
+    {preview && <ResourceReview title={`${preview.title} · v${preview.version}`} text={preview.text} onClose={() => setPreview(null)} />}
+    {editing && <ResourceReview title="Review course resource" text={text} onClose={() => setEditing(false)}>
+      <form className="stack" onSubmit={save}>
+        <div className="field"><label htmlFor={`resource-edit-title-${resource.id}`}>Title</label>
+          <input id={`resource-edit-title-${resource.id}`} value={title} maxLength={200} required disabled={saving} onChange={event => { setSaveMessage(""); setTitle(event.target.value); }} />
+        </div>
+        <div className="field"><label htmlFor={`resource-edit-text-${resource.id}`}>Resource Markdown</label>
+          <textarea id={`resource-edit-text-${resource.id}`} value={text} maxLength={500000} required disabled={saving} onChange={event => { setSaveMessage(""); setText(event.target.value); }} />
+        </div>
+        {published && <p className="muted">Saving edits creates a draft. Publish it again to make it available to students.</p>}
+        {error && <p className="notice error" role="alert">{error}</p>}
+        {saveMessage && <p className="notice success" role="status">{saveMessage}</p>}
+        <div className="card-actions"><button className="button small primary" disabled={busy || saving || !changed || !title.trim() || !text.trim()}>{saving ? "Saving…" : "Save edits"}</button></div>
+      </form>
+    </ResourceReview>}
+  </article>;
+}
+
+function PublishedResource({ resource }: { resource: Resource }) {
+  const [open, setOpen] = useState(false);
+  return <article className="resource-card">
+    <div className="row"><h3>{resource.title}</h3><div className="card-actions">
+      <button className="button small" type="button" onClick={() => setOpen(true)}>Preview resource</button>
+      {resource.hasFile && <a className="button small" href={`/api/resources/${resource.id}/file`} target="_blank" rel="noreferrer">Open original</a>}
+    </div></div>
+    {open && <ResourceReview title={resource.title} text={resource.text || ""} onClose={() => setOpen(false)} />}
   </article>;
 }
 
@@ -453,7 +534,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
     {error && <ErrorNotice error={error} retry={() => void refresh()} />}
     <div className="student-top">
       <div><h3>Course resources</h3><p className="muted">Only published materials are visible to students.</p>
-        {published.length ? <div className="stack">{published.map((resource) => <article className="resource-card" key={resource.id}><div className="row"><div><h3>{resource.title}</h3><span className="badge green">Published</span></div>{resource.hasFile && <a className="button small" href={`/api/resources/${resource.id}/file`} target="_blank" rel="noreferrer">Open resource</a>}</div>{resource.text && <p style={{ marginTop: 12, whiteSpace: "pre-wrap" }}>{resource.text}</p>}</article>)}</div> :
+        {published.length ? <div className="stack">{published.map((resource) => <PublishedResource key={resource.id} resource={resource} />)}</div> :
           <div className="empty"><span className="empty-mark">01</span><h3>No published resources</h3><p>The course has no material available to students yet.</p></div>}
       </div>
       <aside className="status-card" aria-label="Onboarding status"><div className="eyebrow">Academic onboarding</div><h3>{baselineResult ? "Baseline completed" : canResume ? "Baseline in progress" : ready ? "Baseline ready" : "Not ready yet"}</h3>
@@ -470,7 +551,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
       {questions.length ? <form onSubmit={(event) => void submitAssessment(event)}>
         {questions.map((question, index) => <div className="assessment-question" key={question.id}>
           <label className="field-label" htmlFor={`student-answer-${question.id}`}><span className="badge">Question {index + 1}</span></label>
-          <p style={{ margin: "12px 0 0" }}>{question.prompt}</p>
+          <Markdown text={question.prompt} />
           <div className="field" style={{ marginTop: 12 }}><label htmlFor={`student-answer-${question.id}`}>Your response</label>
             <textarea id={`student-answer-${question.id}`} required value={answers[String(question.id)] || ""} disabled={submitted || submitting}
               onBlur={(event) => void api("/api/assessment-sessions/"+assessmentSessionId+"/answers",{method:"PUT",body:jsonBody({answers:{[String(question.id)]:event.currentTarget.value}})}).catch((e)=>setAssessmentError(e.message))}

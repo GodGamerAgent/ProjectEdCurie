@@ -1,3 +1,4 @@
+import Markdown from "./Markdown";
 import { useCallback, useEffect, useState } from "react";
 import { api, jsonBody } from "./api";
 
@@ -49,7 +50,8 @@ export default function QuestionDrafts({ assessmentId, concepts, refresh }: {
     {drafts.map(d => <article className="question-card" key={d.id} style={{ marginTop: 20 }}>
       <h4>{d.conceptName} · Pending teacher review</h4>
       <p className="muted">Source: {d.sourceTitle} · version {d.sourceVersion}</p>
-      <blockquote style={{ whiteSpace: "pre-wrap" }}>{d.sourceQuote}</blockquote>
+      <blockquote><Markdown text={d.sourceQuote} /></blockquote>
+      <details><summary>Preview formatted question</summary><Markdown text={d.prompt} /></details>
       <div className="field"><label htmlFor={`ai-prompt-${d.id}`}>Review question and options</label><textarea id={`ai-prompt-${d.id}`} rows={8} maxLength={5000} disabled={busy} value={d.prompt} onChange={e => edit(d.id, "prompt", e.target.value)} /></div>
       <div className="field"><label htmlFor={`ai-answer-${d.id}`}>Expected answer (exact text used for grading)</label><input id={`ai-answer-${d.id}`} maxLength={5000} disabled={busy} value={d.answer} onChange={e => edit(d.id, "answer", e.target.value)} /></div>
       <div className="row" style={{ marginTop: 12 }}><button type="button" className="button small success" disabled={busy || !d.prompt.trim() || !d.answer.trim()} onClick={() => void review(d, "accept")}>Approve and add to assessment</button><button type="button" className="button small" disabled={busy} onClick={() => void review(d, "discard")}>Discard draft</button></div>

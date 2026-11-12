@@ -239,6 +239,22 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).patch(`/api/resources/${broken.body.id}`).set(as("teacher")).send({ title: "Unextractable PDF", text: "Manual section: teacher\u0000 supplied text." })).body.text).toBe("Manual section: teacher supplied text.");
     expect((await request(app).post(`/api/resources/${broken.body.id}/publish`).set(as("teacher"))).status).toBe(200);
   });
+  it("imports Markdown and lets only the assigned teacher preview the full saved version", async () => {
+    const markdown = "    first = 1\n\n# Sequences\n\n" + "A term in the sequence.\n".repeat(1000) +
+      "\n$$\nS_n = \\sum_{k=1}^n a_k\n$$\n\n```python\nprint(42)\n```\n";
+    const resource = await request(app).post(`/api/courses/${courseId}/resources`).set(as("teacher"))
+      .field("title", "Markdown notes").attach("file", Buffer.from(markdown), { filename: "notes.md", contentType: "text/markdown" });
+    expect(resource.status).toBe(201);
+    expect(resource.body.text).toBe(markdown);
+    const url = `/api/resources/${resource.body.id}`;
+    const versions = await request(app).get(url + "/versions").set(as("teacher"));
+    const original = url + "/versions/" + versions.body.versions[0].id;
+    const edited = "# Revised Markdown";
+    expect((await request(app).patch(url).set(as("teacher")).send({title:"Markdown notes",text:edited})).body.version).toBe(2);
+    expect((await request(app).get(original).set(as("teacher"))).body).toEqual({title:"Markdown notes",version:1,text:markdown});
+    expect((await request(app).get(original).set(as("student"))).status).toBe(403);
+    expect((await request(app).get(original).set(as("otherInstituteTeacher"))).status).toBe(403);
+  });
   it("runs the isolated study loop with source validation and institute isolation", async () => {
     const course = await request(app).post("/api/courses").set(as("teacher")).send({title:"Study loop"});
     const id = course.body.id;

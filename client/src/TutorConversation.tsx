@@ -1,3 +1,4 @@
+import Markdown from "./Markdown";
 import { FormEvent,useCallback,useEffect,useState } from "react";
 import { api,jsonBody } from "./api";
 type Citation={resourceId:string;resourceVersionId:string;title:string;location:string};
@@ -15,10 +16,10 @@ export default function TutorConversation({lessonId}:{lessonId:string}) {
     <p className="muted">The tutor answers from the cited course material and keeps this conversation with the lesson.</p>
     {error&&<div className="notice error" role="alert">{error}<button className="button small" onClick={()=>void load()}>Retry</button></div>}
     {messages.length>0&&<ol className="stack" aria-label="Lesson conversation">{messages.map(message=><li className={`course-card ${message.role==="student"?"":"conversation-reply"}`} key={message.id}>
-      <strong>{message.role==="student"?"You":"EdCurie tutor"}</strong><p style={{whiteSpace:"pre-wrap"}}>{message.content}</p>
+      <strong>{message.role==="student"?"You":"EdCurie tutor"}</strong><Markdown text={message.content} />
       {message.citations?.length>0&&<ul>{message.citations.map((citation,index)=><li key={`${citation.resourceVersionId}-${index}`}><button className="button small" type="button" onClick={()=>void api<{text:string;location:string}>(`/api/resources/${citation.resourceId}/excerpt?version=${citation.resourceVersionId}&location=${encodeURIComponent(citation.location)}`).then(data=>setSource(data)).catch(e=>setError(e.message))}>Open {citation.title} · {citation.location}</button></li>)}</ul>}
     </li>)}</ol>}
-    {source&&<div className="notice" role="region" aria-label="Follow-up source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p><button className="button small" type="button" onClick={()=>setSource(null)}>Close source</button></div>}
+    {source&&<div className="notice" role="region" aria-label="Follow-up source excerpt"><strong>{source.location}</strong><Markdown text={source.text} /><button className="button small" type="button" onClick={()=>setSource(null)}>Close source</button></div>}
     <form onSubmit={send}><div className="field"><label htmlFor={`followup-${lessonId}`}>Your question</label><textarea id={`followup-${lessonId}`} rows={2} maxLength={1200} required value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Ask about a step in the explanation"/></div>
       <button className="button small" disabled={busy||!draft.trim()}>{busy?"Thinking…":"Send follow-up"}</button>
     </form>
