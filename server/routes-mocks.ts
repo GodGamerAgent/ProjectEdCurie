@@ -1,14 +1,14 @@
 import { Router } from "express";
 import type { Pool } from "pg";
 import { HttpError } from "./auth";
-import { cleanString, currentUser, requireRole, uuid } from "./access";
+import { cleanString, courseAccess, currentUser, requireRole, teacherCourse, uuid } from "./access";
 import { studentReady } from "./routes-study";
 
 const normalize=(value:string)=>value.trim().replace(/\s+/g," ").toLocaleLowerCase("en-US");
-function clientView(session:any) {
+function clientView(session:any,teacherReview:string|null=null) {
   const questions=Array.isArray(session.questions)?session.questions.map((q:any)=>({id:q.id,conceptId:q.conceptId,conceptName:q.conceptName,
     prompt:q.prompt,sourceTitle:q.sourceTitle,sourceLocation:q.sourceLocation})):session.questions;
-  return {id:session.id,status:session.status,questions,answers:session.answers||{},result:session.status==="completed"?session.result:null};
+  return {id:session.id,status:session.status,questions,answers:session.answers||{},result:session.status==="completed"?session.result:null,teacherReview};
 }
 export function mockRoutes(db:Pool) {
   const router=Router();
@@ -43,7 +43,34 @@ export function mockRoutes(db:Pool) {
     const session=(await db.query("SELECT * FROM adaptive_mock_sessions WHERE id=$1 AND user_id=$2",[id,user.id])).rows[0];
     if(!session)throw new HttpError(404,"Mock session not found.");
     await studentReady(db,user,session.course_id);
-    res.json(clientView(session));
+    const review=(await db.query("SELECT feedback FROM mock_reviews WHERE session_id=$1",[id])).rows[0]?.feedback??null;
+    res.json(clientView(session,review));
+  });
+  router.get("/api/courses/:id/mocks/history",async(req,res)=>{
+    const user=currentUser(res);requireRole(user,"student");const courseId=uuid(req.params.id);await studentReady(db,user,courseId);
+    const rows=await db.query(`SELECT s.*,mr.feedback AS "teacherReview" FROM adaptive_mock_sessions s
+      LEFT JOIN mock_reviews mr ON mr.session_id=s.id WHERE s.user_id=$1 AND s.course_id=$2 AND s.status='completed'
+      ORDER BY s.completed_at DESC LIMIT 10`,[user.id,courseId]);
+    res.json({sessions:rows.rows.map((row:any)=>clientView(row,row.teacherReview??null))});
+  });
+  router.get("/api/courses/:id/mocks/results",async(req,res)=>{
+    const user=currentUser(res),courseId=uuid(req.params.id);await teacherCourse(db,user,courseId);
+    const rows=await db.query(`SELECT s.id,s.score,s.correct_count AS "correctCount",s.question_count AS "questionCount",
+      s.completed_at AS "completedAt",s.result,u.email,mr.feedback AS "teacherReview"
+      FROM adaptive_mock_sessions s JOIN users u ON u.id=s.user_id LEFT JOIN mock_reviews mr ON mr.session_id=s.id
+      WHERE s.course_id=$1 AND s.status='completed' ORDER BY s.completed_at DESC LIMIT 50`,[courseId]);
+    res.json({results:rows.rows});
+  });
+  router.post("/api/mock-sessions/:id/review",async(req,res)=>{
+    const user=currentUser(res),id=uuid(req.params.id),feedback=cleanString(req.body?.feedback,"Teacher feedback",2000);
+    const session=(await db.query("SELECT course_id,status FROM adaptive_mock_sessions WHERE id=$1",[id])).rows[0];
+    if(!session)throw new HttpError(404,"Mock session not found.");
+    await teacherCourse(db,user,session.course_id);
+    if(session.status!=="completed")throw new HttpError(409,"Only submitted mocks can be reviewed.");
+    const result=await db.query(`INSERT INTO mock_reviews(session_id,reviewer_id,feedback) VALUES($1,$2,$3)
+      ON CONFLICT(session_id) DO UPDATE SET reviewer_id=excluded.reviewer_id,feedback=excluded.feedback,updated_at=now()
+      RETURNING feedback,updated_at AS "updatedAt"`,[id,user.id,feedback]);
+    res.json(result.rows[0]);
   });
   router.post("/api/mock-sessions/:id/answer",async(req,res)=>{
     const user=currentUser(res);requireRole(user,"student");const id=uuid(req.params.id);

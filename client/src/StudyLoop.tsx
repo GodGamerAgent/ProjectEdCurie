@@ -6,6 +6,7 @@ import { TeacherAssignments } from "./AssignmentPanels";
 import TeacherAnalytics from "./TeacherAnalytics";
 import MilestonesPanel from "./MilestonesPanel";
 import TutorConversation from "./TutorConversation";
+import TeacherMockReviews from "./TeacherMockReviews";
 
 type Concept = { id: string; name: string; resourceId: string; prerequisites?: {id:string;name:string}[] };
 type Resource = { id: string | number; title: string };
@@ -59,16 +60,21 @@ function ReviewVault({courseId,baselineReady,refreshKey}:{courseId:string|number
 }
 function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineReady:boolean}) {
   type Mock={id:string;status:string;questions:{id:string;conceptId:string;conceptName:string;prompt:string;sourceTitle:string;sourceLocation:string}[];
-    answers:Record<string,string>;result:{score:number;correctCount:number;questionCount:number;details:{questionId:string;prompt:string;answer:string;expectedAnswer:string;correct:boolean}[];message:string}|null};
+    answers:Record<string,string>;teacherReview?:string|null;result:{score:number;correctCount:number;questionCount:number;details:{questionId:string;prompt:string;answer:string;expectedAnswer:string;correct:boolean}[];message:string}|null};
   const [mock,setMock]=useState<Mock|null>(null),[draft,setDraft]=useState<Record<string,string>>({});
+  const [history,setHistory]=useState<Mock[]>([]);
   const [busy,setBusy]=useState(false),[error,setError]=useState("");
   async function act(action:()=>Promise<void>){setBusy(true);setError("");try{await action();}catch(e){setError(e instanceof Error?e.message:"Mock could not be saved.");}finally{setBusy(false);}}
+  const loadHistory=useCallback(async()=>{if(!baselineReady){setHistory([]);return;}setHistory((await api<{sessions:Mock[]}>(`/api/courses/${courseId}/mocks/history`)).sessions);},[courseId,baselineReady]);
+  useEffect(()=>{void loadHistory().catch(e=>setError(e.message));},[loadHistory]);
   return <section className="study-section"><div className="divider"/><div className="eyebrow">Assessment practice</div><h3>Adaptive mock</h3>
     <p className="muted">A short mock prioritizes topics with incorrect or limited evidence. It uses current published, source-linked questions. Mock scores remain separate from mastery.</p>
     {error&&<div className="notice error" role="alert">{error}</div>}
-    {!baselineReady?<p className="muted">Complete the baseline to unlock mocks.</p>:<button className="button" disabled={busy} onClick={()=>void act(async()=>{
+     {!baselineReady?<p className="muted">Complete the baseline to unlock mocks.</p>:<><button className="button" disabled={busy} onClick={()=>void act(async()=>{
       const next=await api<Mock>(`/api/courses/${courseId}/mocks/start`,{method:"POST"});setMock(next);setDraft(next.answers||{});
-    })}>{mock?.status==="active"?"Resume mock":"Start adaptive mock"}</button>}
+     })}>{mock?.status==="active"?"Resume mock":"Start adaptive mock"}</button>
+     {history.length>0&&<details style={{marginTop:12}}><summary>Previous mocks ({history.length})</summary><div className="stack" style={{marginTop:10}}>{history.map(item=><div className="course-card row" key={item.id}><span><strong>{item.result?.score}% · {item.result?.correctCount}/{item.result?.questionCount}</strong><small>{item.teacherReview?"Teacher feedback available":"Submitted mock"}</small></span><button className="button small" disabled={busy} onClick={()=>void act(async()=>{setMock(await api<Mock>(`/api/mock-sessions/${item.id}`));setDraft(item.answers||{});})}>View result</button></div>)}</div></details>}
+     </>}
     {mock?.status==="active"&&<div className="stack" style={{marginTop:16}}>{mock.questions.map((q,i)=><div className="course-card" key={q.id}>
       <div className="eyebrow">Question {i+1} · {q.conceptName}</div><p>{q.prompt}</p><p className="muted">Source: {q.sourceTitle} · {q.sourceLocation}</p>
       <div className="field"><label htmlFor={`mock-${q.id}`}>Your answer</label><input id={`mock-${q.id}`} value={draft[q.id]??mock.answers[q.id]??""} onChange={e=>setDraft({...draft,[q.id]:e.target.value})}/></div>
@@ -80,11 +86,12 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
       <button className="button primary" disabled={busy||mock.questions.some(q=>!String(mock.answers[q.id]??draft[q.id]??"").trim())} onClick={()=>void act(async()=>{
         for(const q of mock.questions){const answer=mock.answers[q.id]??draft[q.id];await api(`/api/mock-sessions/${mock.id}/answer`,{method:"POST",body:jsonBody({questionId:q.id,answer})});}
         const result=await api<NonNullable<Mock["result"]>>(`/api/mock-sessions/${mock.id}/submit`,{method:"POST"});
-        setMock({...mock,status:"completed",result});
+        setMock({...mock,status:"completed",result});await loadHistory();
       })}>Submit mock</button>
     </div>}
     {mock?.status==="completed"&&mock.result&&<div className="course-card" style={{marginTop:16}}><strong>Mock result: {mock.result.score}%</strong><p>{mock.result.correctCount} of {mock.result.questionCount} correct. Mastery evidence was not changed.</p>
-      {mock.result.details.map((d,i)=><div key={d.questionId} className="notice" style={{marginTop:10}}><strong>Question {i+1} · {d.correct?"Correct":"Review"}</strong><p>{d.prompt}</p><p>Your answer: {d.answer}</p><p>Expected answer: {d.expectedAnswer}</p></div>)}
+       {mock.teacherReview&&<div className="notice" role="status"><strong>Teacher feedback</strong><p>{mock.teacherReview}</p></div>}
+       {mock.result.details.map((d,i)=><div key={d.questionId} className="notice" style={{marginTop:10}}><strong>Question {i+1} · {d.correct?"Correct":"Review"}</strong><p>{d.prompt}</p><p>Your answer: {d.answer}</p><p>Expected answer: {d.expectedAnswer}</p></div>)}
     </div>}
   </section>;
 }
@@ -165,6 +172,7 @@ export function TeacherStudy({ courseId, resources, assessments, concepts, refre
     <TeacherTimetable courseId={courseId} concepts={concepts}/>
     <TeacherAssignments courseId={courseId} concepts={concepts}/>
     <TeacherAnalytics courseId={courseId}/>
+    <TeacherMockReviews courseId={courseId}/>
     <div className="divider"/><div className="row"><h3>Student progress</h3><button className="button small" type="button" onClick={()=>void loadProgress().catch((e)=>setError(e.message))}>Refresh progress</button></div>
     {progress.length ? <div className="stack">{progress.map((p)=><div className="course-card" key={`${p.studentId}-${p.conceptId}`}><strong>{p.email} · {p.name}</strong><p>{p.status} · Independent {p.independent_correct}/{p.independent_attempts} · Assisted {p.assisted_correct}/{p.assisted_attempts} · Teacher-verified assignments {p.verified_assignments||0}</p></div>)}</div> : <p className="muted">Progress appears once students and concepts are available.</p>}
   </section>;

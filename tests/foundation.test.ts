@@ -536,6 +536,15 @@ describe("foundation access and onboarding", () => {
     expect(submitted.body).toMatchObject({score:100,correctCount:4,questionCount:4});
     expect(submitted.body.details[0].expectedAnswer).toBe("yes");
     expect((await request(app).post(`/api/mock-sessions/${mock.id}/submit`).set(as("student"))).body).toEqual(submitted.body);
+    expect((await request(app).get(`/api/courses/${course.id}/mocks/results`).set(as("student"))).status).toBe(403);
+    expect((await request(app).get(`/api/courses/${course.id}/mocks/results`).set(as("otherTeacher"))).status).toBe(403);
+    expect((await request(app).post(`/api/mock-sessions/${mock.id}/review`).set(as("otherTeacher")).send({feedback:"Review"})).status).toBe(403);
+    expect((await request(app).post(`/api/mock-sessions/${mock.id}/review`).set(as("teacher")).send({feedback:"Revisit the source explanation for the first concept."})).body.feedback)
+      .toBe("Revisit the source explanation for the first concept.");
+    expect((await request(app).get(`/api/courses/${course.id}/mocks/history`).set(as("student"))).body.sessions[0].teacherReview)
+      .toBe("Revisit the source explanation for the first concept.");
+    expect((await request(app).get(`/api/mock-sessions/${mock.id}`).set(as("student"))).body.teacherReview)
+      .toBe("Revisit the source explanation for the first concept.");
     const after=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts;
     expect(after.map((c:any)=>c.independent_attempts)).toEqual(before.map((c:any)=>c.independent_attempts));
   });

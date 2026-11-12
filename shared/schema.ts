@@ -379,6 +379,14 @@ export const adaptiveMockSessions = pgTable("adaptive_mock_sessions",{
   createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
   completedAt: timestamp("completed_at",{withTimezone:true})
 },table=>[uniqueIndex("adaptive_mock_one_active_per_course").on(table.userId,table.courseId).where(sql`${table.status}='active'`)]);
+export const mockReviews = pgTable("mock_reviews",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  sessionId: uuid("session_id").notNull().references(()=>adaptiveMockSessions.id),
+  reviewerId: uuid("reviewer_id").notNull().references(()=>users.id),
+  feedback: text("feedback").notNull(),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("mock_review_session_unique").on(table.sessionId)]);
 export const assignments = pgTable("assignments",{
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(()=>courses.id),
