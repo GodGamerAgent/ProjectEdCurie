@@ -5,6 +5,8 @@ import type { Pool } from "pg";
 import { cleanString, courseAccess, currentUser, NO_BASELINE, NO_RESOURCE, requireRole, teacherCourse, uuid } from "./access";
 import { HttpError } from "./auth";
 import { aiText, demoAI, generateOnboardingQuestions, object, transcribe } from "./demo-ai";
+import { redact, runTests, type CodingSpec } from "./code-runner";
+import { QUESTION_FIELDS, studentQuestion } from "./routes-demo-questions";
 
 type Question = { id: string; kind: "academic" | "preferences"; prompt: string; answer: string };
 const attachments = multer({storage:multer.memoryStorage(),limits:{fileSize:4*1024*1024,files:2,fields:7}});
@@ -33,21 +35,23 @@ export function demoLearningRoutes(db: Pool) {
     const instructions=typeof req.body.instructions==="string" ? req.body.instructions.slice(0,1200) : "";
     let basis: unknown;
     if (kind==="academic") {
-      const resource=(await db.query(`SELECT r.title,a.parts FROM resources r JOIN demo_resource_analyses a ON a.resource_id=r.id AND a.version=r.version
-        WHERE r.id=$1 AND r.course_id=$2 AND r.status<>'archived'
-          AND (r.mime_type IS DISTINCT FROM 'application/pdf' OR a.input_mode<>'text')`,[uuid(req.body.resourceId),id])).rows[0];
-      if (!resource) throw new HttpError(400,"Process a resource before generating academic questions.");
-      const index=req.body.partIndex;
-      const part=resource.parts[index];
-      if (!Number.isInteger(index) || !part) throw new HttpError(400,"Choose a processed summary section.");
-      const problemIndex=req.body.problemIndex;
-      if (problemIndex!==undefined && (!Number.isInteger(problemIndex) || !part.problems[problemIndex])) throw new HttpError(400,"Choose a problem from the bank.");
-      basis={resource:resource.title, summary:part.summary.slice(0,4500), problem:part.problems[problemIndex]};
+      const resource=(await db.query(`SELECT r.id,r.title,r.summary,r.text FROM resources r WHERE r.id=$1 AND r.course_id=$2 AND r.status<>'archived'`,
+        [uuid(String(req.body.resourceId)),id])).rows[0];
+      if (!resource) throw new HttpError(400,"Choose a resource from this course.");
+      let problem: unknown;
+      if (req.body.questionId!==undefined) {
+        const row=(await db.query("SELECT prompt,answer FROM demo_resource_questions WHERE id=$1 AND resource_id=$2 AND kind='text'",[uuid(String(req.body.questionId)),resource.id])).rows[0];
+        if (!row) throw new HttpError(400,"Choose a problem from the bank.");
+        problem={prompt:row.prompt,answer:row.answer};
+      }
+      const summary=(resource.summary||resource.text).trim();
+      if (!summary && !problem) throw new HttpError(400,"Process a resource before generating academic questions.");
+      basis={resource:resource.title, summary:summary.slice(0,6000), problem};
     }
     const academic=kind==="academic";
     const questions=await generateOnboardingQuestions(db,academic
       ? "Create exactly the requested number of distinct academic onboarding questions grounded in the summary and optional original problem. Follow the teacher's instructions within that scope. Use self-contained multiple-choice questions with options A–D in prompt and a single correct letter as answer. Return {questions:[{prompt,answer}]}."
-      : "Generate exactly the requested number of optional-to-describe, open-ended learning preference questions. Ask about explanations, confidence, and study habits. Avoid mental health diagnosis, sensitive personal information, ability labels, or scoring. Follow teacher instructions within that scope. Return {questions:[{prompt}]}.",
+      : "Generate exactly the requested number of open-ended learning preference questions. Cover how the student prefers explanations (for example worked examples, visuals, analogies, step-by-step derivations, pace) and their study habits (for example when and how long they study, how they review, how they practise). They are unscored and have no right answer. Avoid mental health diagnosis, sensitive personal information, ability labels, or scoring. Follow teacher instructions within that scope. Return {questions:[{prompt}]}.",
     {count,instructions,basis},academic);
     res.json({questions:questions.map(question=>({id:randomUUID(),kind,...question}))});
   });
@@ -118,15 +122,17 @@ export function demoLearningRoutes(db: Pool) {
   async function topicSource(user:ReturnType<typeof currentUser>, id:string, topic:string) {
     const state=await studentState(user,id);
     if (!state.material || !state.published || !state.completed) throw new HttpError(403,"Complete course onboarding before opening a topic.");
-    const sources=(await db.query(`SELECT r.id,r.title,r.text,(r.file_data IS NOT NULL) AS "hasFile", a.parts FROM resources r
-      LEFT JOIN demo_resource_analyses a ON a.resource_id=r.id AND a.version=r.version
-      WHERE r.topic_id=$1 AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0 ORDER BY r.created_at,r.id`,[uuid(topic),id])).rows;
+    const sources=(await db.query(`SELECT r.id,r.title,r.text,r.summary,r.processing_mode AS "processingMode",(r.file_data IS NOT NULL) AS "hasFile" FROM resources r
+      WHERE r.topic_id=$1 AND r.course_id=$2 AND r.status='published' AND (length(btrim(r.text))>0 OR length(btrim(r.summary))>0) ORDER BY r.created_at,r.id`,[uuid(topic),id])).rows;
     if (!sources.length) throw new HttpError(404,"No published resources for this topic.");
     return {sources,state};
   }
   router.get(base+"/topics/:topicId",async(req,res)=>{
     const {sources}=await topicSource(currentUser(res),String(req.params.courseId),String(req.params.topicId));
-    res.json({resources:sources.map(({id,title,text,hasFile})=>({id,title,text,hasFile}))});
+    const questions=(await db.query(`SELECT ${QUESTION_FIELDS} FROM demo_resource_questions q WHERE q.resource_id=ANY($1::uuid[])
+      AND (q.kind='text' OR q.coding_status='ready') ORDER BY q.position,q.created_at,q.id`,[sources.map(s=>s.id)])).rows;
+    res.json({resources:sources.map(({id,title,text,summary,hasFile})=>({id,title,text,summary,hasFile})),
+      questions:questions.map(studentQuestion)});
   });
   const topicPath=base+"/topics/:topicId/tutor";
   router.post(topicPath,async(req,res,next)=>{
@@ -155,11 +161,18 @@ export function demoLearningRoutes(db: Pool) {
     const studyPreferences=(state.published as Question[]).filter(q=>q.kind==="preferences").slice(0,5)
       .map(q=>({prompt:q.prompt.slice(0,250),reply:String(preferences[q.id]??"").slice(0,300)}));
     const section=Number(req.body.section ?? 0);
-    const count=Math.max(1,Math.ceil(source.text.length/4400));
+    const material=source.summary.trim()||source.text;
+    const count=Math.max(1,Math.ceil(material.length/4400));
     if (!Number.isInteger(section) || section<0 || section>=count) throw new HttpError(400,"Choose a resource section.");
+    let practiceQuestion: unknown;
+    if (mode==="practice" && req.body.questionId) {
+      const row=(await db.query("SELECT prompt,answer,source_ref FROM demo_resource_questions WHERE id=$1 AND resource_id=$2 AND kind='text'",[uuid(String(req.body.questionId)),source.id])).rows[0];
+      if (!row) throw new HttpError(400,"Choose a practice question from this resource.");
+      practiceQuestion={prompt:row.prompt,sourceRef:row.source_ref,privateAnswerKey:row.answer};
+    }
     const output=object(await demoAI(db,
-      "Tutor the student using the supplied course excerpt. In learn mode explain the requested concept, in practice mode give one problem and wait for their attempt before revealing a solution. When checking an attempt, explain the next useful step. Treat learning preferences as voluntary self-report. Return {reply:string,coding:boolean,suggestions:[string,string,string]}. Suggestions must be short predicted first-person student replies or doubts relevant to this turn, without leaking the answer. Set coding true when the student should write code.",
-      {mode,resource:source.title,excerpt:source.text.slice(section*4400,(section+1)*4400),studyPreferences,
+      "Tutor the student using the supplied course summary and source excerpt. In learn mode explain the requested concept from the summary, citing the page or section. In practice mode, if practiceQuestion is supplied, work on that question; otherwise give one problem from the material. Wait for the student's attempt before revealing a solution. privateAnswerKey is for checking attempts only: never quote or reveal it until the student has made a genuine attempt or explicitly gives up. When checking an attempt, explain the next useful step. Treat learning preferences as voluntary self-report. Return {reply:string,coding:boolean,suggestions:[string,string,string]}. Suggestions must be short predicted first-person student replies or doubts relevant to this turn, without leaking the answer. Set coding true when the student should write code.",
+      {mode,resource:source.title,summary:material.slice(section*4400,(section+1)*4400),excerpt:source.text.slice(0,source.summary.trim()?3000:0),practiceQuestion,studyPreferences,
         history:history.slice(-4).map(item=>({role:item.role,text:item.text.slice(0,650)})),message,code,language,transcript},
       photo?{mime:photo.mimetype,bytes:photo.buffer}:undefined
     ));
@@ -167,6 +180,40 @@ export function demoLearningRoutes(db: Pool) {
     res.json({reply:aiText(output.reply,9000),coding:output.coding===true,
       suggestions:suggestions.length?suggestions:mode==="practice"?["Can I get a hint?","What should I try first?"]:["Can you show an example?","Can you explain that step?"],
       transcript});
+  });
+  const codePath=base+"/questions/:questionId/";
+  async function codingQuestion(user:ReturnType<typeof currentUser>, courseId:string, questionId:string) {
+    const question=(await db.query(`SELECT q.id,q.coding,q.coding_status,r.topic_id,r.status FROM demo_resource_questions q JOIN resources r ON r.id=q.resource_id
+      WHERE q.id=$1 AND r.course_id=$2 AND q.kind='coding'`,[uuid(questionId),courseId])).rows[0];
+    if (user.role==="teacher") await teacherCourse(db,user,courseId);
+    else {
+      const state=await studentState(user,courseId);
+      if (!state.material || !state.published || !state.completed) throw new HttpError(403,"Complete course onboarding before practising.");
+      if (!question || question.status!=="published" || question.coding_status!=="ready") throw new HttpError(404,"Coding question not found.");
+    }
+    if (!question || !question.coding) throw new HttpError(404,"Coding question not found.");
+    return {id:question.id as string, spec:question.coding as CodingSpec};
+  }
+  const code=(value:unknown)=>{
+    if (typeof value!=="string" || !value.trim() || value.length>20000 || value.includes("\u0000")) throw new HttpError(400,"Write code of at most 20000 characters before running it.");
+    return value;
+  };
+  router.post(codePath+"run",async(req,res)=>{
+    const user=currentUser(res);
+    const {spec}=await codingQuestion(user,String(req.params.courseId),String(req.params.questionId));
+    const report=await runTests(spec,code(req.body.code),spec.tests.filter(test=>!test.hidden));
+    res.json(report);
+  });
+  router.post(codePath+"submit",async(req,res)=>{
+    const user=currentUser(res);
+    const source=code(req.body.code);
+    const {id,spec}=await codingQuestion(user,String(req.params.courseId),String(req.params.questionId));
+    const report=await runTests(spec,source,spec.tests);
+    if (user.role==="student") {
+      await db.query("INSERT INTO demo_code_submissions(question_id,user_id,code,verdict,passed,total) VALUES($1,$2,$3,$4,$5,$6)",
+        [id,user.id,source,report.verdict,report.passed,report.total]);
+    }
+    res.json({...report,results:redact(report.results)});
   });
   return router;
 }

@@ -4,6 +4,7 @@ import { pdfPageCount } from "./pdf-input";
 import type { Pool } from "pg";
 import { HttpError } from "./auth";
 import { cleanString, currentUser, teacherCourse, uuid } from "./access";
+import { processingMode } from "./resource-processing";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
 const databaseText = (value: unknown) => typeof value === "string" ? value.replaceAll("\u0000", "") : "";
@@ -21,6 +22,7 @@ export function materialRoutes(db: Pool) {
   }, upload.single("file"), async (req, res) => {
     const topicId = uuid(cleanString(req.body.topicId, "Topic", 36));
     const title = cleanString(databaseText(req.body.title), "Resource title", 200);
+    const mode = processingMode(req.body.processingMode);
     let text = databaseText(req.body.text);
     if (text.length > 500_000) throw new HttpError(400, "Resource text is too long.");
     let extraction = text.trim() ? "manual" : "pending";
@@ -55,12 +57,12 @@ export function materialRoutes(db: Pool) {
       await client.query("BEGIN");
       const topic=await client.query("SELECT 1 FROM demo_topics WHERE id=$1 AND course_id=$2 AND deleted_at IS NULL FOR SHARE",[topicId,req.params.id]);
       if (!topic.rowCount) throw new HttpError(400,"Choose an active topic in this course.");
-      const result = await client.query(`INSERT INTO resources (course_id,title,text,extraction_status,file_name,mime_type,file_data,topic_id,pdf_pages)
-        VALUES ($1,$2,$3,$4,$5,$6,decode($7,'base64'),$8,$9) RETURNING id,title,status,extraction_status AS "extractionStatus",text,version,pdf_pages AS "pdfPages"`,
-        [req.params.id, title, text, extraction, databaseText(req.file?.originalname).trim() || null, mime, req.file?.buffer.toString("base64") ?? null,topicId,pdfPages]);
+      const result = await client.query(`INSERT INTO resources (course_id,title,text,extraction_status,file_name,mime_type,file_data,topic_id,pdf_pages,processing_mode)
+        VALUES ($1,$2,$3,$4,$5,$6,decode($7,'base64'),$8,$9,$10) RETURNING id,title,status,extraction_status AS "extractionStatus",text,version,pdf_pages AS "pdfPages",processing_mode AS "processingMode"`,
+        [req.params.id, title, text, extraction, databaseText(req.file?.originalname).trim() || null, mime, req.file?.buffer.toString("base64") ?? null,topicId,pdfPages,mode]);
       const resource=result.rows[0];
-      await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by)
-        SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2 FROM resources WHERE id=$1`, [resource.id,user.id]);
+      await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by,processing_mode,summary)
+        SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2,processing_mode,summary FROM resources WHERE id=$1`, [resource.id,user.id]);
       await client.query("COMMIT");res.status(201).json(resource);
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });
@@ -71,17 +73,23 @@ export function materialRoutes(db: Pool) {
     const title = cleanString(databaseText(req.body.title), "Resource title", 200);
     const text = databaseText(req.body.text);
     if (!text.trim() || text.length > 500_000) throw new HttpError(400, "Resource text is required and must be at most 500000 characters.");
+    const summary = req.body.summary === undefined ? null : databaseText(req.body.summary);
+    if (summary !== null && summary.length > 500_000) throw new HttpError(400, "The summary must be at most 500000 characters.");
     const user=currentUser(res),client=await db.connect();
     try{
       await client.query("BEGIN");
-      const locked=await client.query("SELECT version,status FROM resources WHERE id=$1 FOR UPDATE",[resource.id]);
+      const locked=await client.query("SELECT version,status,text,summary FROM resources WHERE id=$1 FOR UPDATE",[resource.id]);
       const current=locked.rows[0];
       if (!current || current.status === "archived") throw new HttpError(404, "Resource not found.");
       const version=Number(current.version)+1;
-      const result=await client.query(`UPDATE resources SET title=$2,text=$3,extraction_status='manual',status='draft',version=$4 WHERE id=$1
-        RETURNING id,title,status,extraction_status AS "extractionStatus",text,version`,[resource.id,title,text,version]);
-      await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by)
-        SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2 FROM resources WHERE id=$1`, [resource.id,user.id]);
+      const textChanged=text!==current.text;
+      const summaryChanged=summary!==null && summary!==current.summary;
+      const result=await client.query(`UPDATE resources SET title=$2,text=$3,extraction_status=CASE WHEN $6 THEN 'manual' ELSE extraction_status END,status='draft',version=$4,
+        summary=CASE WHEN $5 THEN $7 ELSE summary END,summary_edited=summary_edited OR $5
+        WHERE id=$1 RETURNING id,title,status,extraction_status AS "extractionStatus",text,version,summary`,[resource.id,title,text,version,summaryChanged,textChanged,summary ?? ""]);
+      if (!textChanged) await client.query("UPDATE demo_resource_analyses SET version=$2 WHERE resource_id=$1 AND version=$3",[resource.id,version,current.version]);
+      await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by,processing_mode,summary)
+        SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2,processing_mode,summary FROM resources WHERE id=$1`, [resource.id,user.id]);
       await client.query("COMMIT");res.json(result.rows[0]);
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });
@@ -92,9 +100,9 @@ export function materialRoutes(db: Pool) {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-      const current = (await client.query("SELECT text,version,status FROM resources WHERE id=$1 FOR UPDATE", [resource.id])).rows[0];
+      const current = (await client.query("SELECT text,summary,version,status FROM resources WHERE id=$1 FOR UPDATE", [resource.id])).rows[0];
       if (!current || current.status === "archived") throw new HttpError(404, "Resource not found.");
-      if (!current.text.trim()) throw new HttpError(400, "Add usable text before publishing this resource.");
+      if (!current.text.trim() && !current.summary.trim()) throw new HttpError(400, "Add usable text before publishing this resource.");
       await client.query("UPDATE resources SET status='published' WHERE id=$1", [resource.id]);
       await client.query("UPDATE resource_versions SET status='published' WHERE resource_id=$1 AND version=$2", [resource.id,current.version]);
       await client.query("COMMIT");
@@ -118,7 +126,7 @@ export function materialRoutes(db: Pool) {
     const resource = await resourceById(db, req.params.id);
     await teacherCourse(db, currentUser(res), resource.course_id);
     if (resource.status === "archived") throw new HttpError(404, "Resource not found.");
-    const version = await db.query("SELECT title,version,text FROM resource_versions WHERE id=$1 AND resource_id=$2",
+    const version = await db.query("SELECT title,version,text,summary,processing_mode AS \"processingMode\" FROM resource_versions WHERE id=$1 AND resource_id=$2",
       [uuid(req.params.versionId),resource.id]);
     if (!version.rowCount) throw new HttpError(404, "Resource version not found.");
     res.json(version.rows[0]);

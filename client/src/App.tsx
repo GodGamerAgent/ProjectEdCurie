@@ -7,6 +7,8 @@ import { Redirect as WouterRedirect, Route, Router as WouterRouter, Switch, useL
 import { api, jsonBody } from "./api";
 import AdminWorkspace from "./AdminWorkspace";
 import SignupFieldHints from "./SignupFieldHints";
+import Markdown from "./Markdown";
+import MarkdownEditor from "./MarkdownEditor";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -185,10 +187,10 @@ function TeacherWorkspace() {
         {error && <ErrorNotice error={error} retry={() => void refresh()} />}
         <form className="form-grid" onSubmit={create} style={{ margin: "20px 0 24px" }}>
           <div className="field"><label htmlFor="course-title">Course title</label><input id="course-title" required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Course title" /></div>
-          <div className="field full"><label htmlFor="course-description">Description</label><textarea id="course-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What will students learn in this course?" /></div>
+          <MarkdownEditor className="full" label="Description" compact rows={3} value={description} onChange={setDescription} maxLength={2000} placeholder="What will students learn in this course?" />
           <div className="field"><button className="button primary" disabled={busy}>Create course</button></div>
         </form>
-        {courses === null ? <div className="stack"><div className="loading-skeleton" /><div className="loading-skeleton" /></div> : courses.length ? <div className="stack">{courses.map((course) => <article key={course.id} className="course-card card"><div className="row"><div><h3>{course.title}</h3><p>{course.description || "No description provided."}</p></div><button className="button small" onClick={() => setSelectedId(course.id)}>Open course</button></div></article>)}</div> : <div className="empty"><span className="empty-mark">EC</span><h3>No courses have been created</h3><p>Create your first course above. It will appear here after the API confirms it.</p></div>}
+        {courses === null ? <div className="stack"><div className="loading-skeleton" /><div className="loading-skeleton" /></div> : courses.length ? <div className="stack">{courses.map((course) => <article key={course.id} className="course-card card"><div className="row"><div><h3>{course.title}</h3>{course.description ? <Markdown text={course.description} /> : <p>No description provided.</p>}</div><button className="button small" onClick={() => setSelectedId(course.id)}>Open course</button></div></article>)}</div> : <div className="empty"><span className="empty-mark">EC</span><h3>No courses have been created</h3><p>Create your first course above. It will appear here after the API confirms it.</p></div>}
       </> : <TeacherDemo key={selectedId} courseId={String(selectedId)} onBack={() => setSelectedId(null)} />}
     </Panel>
   </div>;
@@ -206,7 +208,7 @@ function StudentWorkspace() {
       {!courses && !error && <p role="status">Loading courses…</p>}
       {courses?.length===0 && <p>Your enrolled courses will appear here.</p>}
       <div className="stack">{courses?.map(course=><article className="course-card row" key={course.id}>
-        <div><h3>{course.title}</h3><p>{course.description}</p></div>
+        <div><h3>{course.title}</h3>{course.description && <Markdown text={course.description} />}</div>
         <button className="button small" onClick={()=>setSelected(course)}>Open course</button>
       </article>)}</div>
     </>}

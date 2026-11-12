@@ -1,8 +1,9 @@
 import { useDeferredValue, useEffect, useId, useRef, type ReactNode } from "react";
 import Markdown from "./Markdown";
 
-export default function ResourceReview({ title, children, text, onClose }: {
+export default function ResourceReview({ title, children, text, onClose, showPreview = true }: {
   title: string;
+  showPreview?: boolean;
   children?: ReactNode;
   text: string;
   onClose: () => void;
@@ -21,12 +22,12 @@ export default function ResourceReview({ title, children, text, onClose }: {
       <h2 id={headingId}>{title}</h2>
       <button type="button" className="button small" onClick={onClose}>Close</button>
     </header>
-    <div className={children ? "resource-review-content resource-review-split" : "resource-review-content"}>
+    <div className={children && showPreview ? "resource-review-content resource-review-split" : "resource-review-content"}>
       {children && <div className="resource-review-editor">{children}</div>}
-      <section className="resource-review-preview" aria-label="Markdown preview">
+      {showPreview && <section className="resource-review-preview" aria-label="Markdown preview">
         {children && <h3>Markdown preview</h3>}
         {preview.trim() ? <Markdown text={preview} /> : <p className="muted">Add text to see a preview.</p>}
-      </section>
+      </section>}
     </div>
   </dialog>;
 }

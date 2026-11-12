@@ -1,10 +1,26 @@
 import { useCallback,useEffect,useState,type FormEvent } from "react";
 import { api,jsonBody } from "./api";
+import MarkdownEditor from "./MarkdownEditor";
 
 type Slot={title:string;weekday:number;startTime:string;endTime:string;startsOn:string;endsOn:string;timezone:string};
 type Event=Slot & {id:string;status:string};
 const days=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const blank:Slot={title:"",weekday:1,startTime:"",endTime:"",startsOn:"",endsOn:"",timezone:"Asia/Kolkata"};
+
+const pad=(n:number)=>String(n).padStart(2,"0");
+function TimeControl({label,value,onChange}:{label:string;value:string;onChange:(value:string)=>void}) {
+  const [hour,minute]=value?value.split(":"):["",""];
+  const set=(h:string,m:string)=>onChange(h&&m?`${h}:${m}`:h?`${h}:${m||"00"}`:"");
+  return <fieldset className="field time-control"><legend className="field-label">{label}</legend>
+    <div className="card-actions tight">
+      <select aria-label={`${label} hour`} required value={hour} onChange={e=>set(e.target.value,minute)}>
+        <option value="">Hour</option>{Array.from({length:24},(_,h)=><option key={h} value={pad(h)}>{pad(h)} ({h%12||12} {h<12?"AM":"PM"})</option>)}</select>
+      <span aria-hidden>:</span>
+      <select aria-label={`${label} minute`} required value={minute} onChange={e=>set(hour||"00",e.target.value)}>
+        <option value="">Min</option>{Array.from({length:60},(_,m)=><option key={m} value={pad(m)}>{pad(m)}</option>)}</select>
+    </div>
+  </fieldset>;
+}
 
 export default function DemoTimetable({courseId}:{courseId:string}) {
   const path=`/api/courses/${courseId}/timetable`;
@@ -36,8 +52,8 @@ export default function DemoTimetable({courseId}:{courseId:string}) {
     <form className="form-grid" onSubmit={save}>
       <label className="field">Class title<input required maxLength={160} value={form.title} onChange={e=>set("title",e.target.value)}/></label>
       <label className="field">Day<select value={form.weekday} onChange={e=>set("weekday",Number(e.target.value))}>{days.map((day,i)=><option value={i+1} key={day}>{day}</option>)}</select></label>
-      <label className="field">Start time<input type="time" step={60} required value={form.startTime} onChange={e=>set("startTime",e.target.value)}/></label>
-      <label className="field">End time<input type="time" step={60} required value={form.endTime} onChange={e=>set("endTime",e.target.value)}/></label>
+      <TimeControl label="Start time" value={form.startTime} onChange={value=>set("startTime",value)}/>
+      <TimeControl label="End time" value={form.endTime} onChange={value=>set("endTime",value)}/>
       <label className="field">First date<input type="date" required value={form.startsOn} onChange={e=>set("startsOn",e.target.value)}/></label>
       <label className="field">Last date<input type="date" required value={form.endsOn} onChange={e=>set("endsOn",e.target.value)}/></label>
       <label className="field">Timezone<input required value={form.timezone} onChange={e=>set("timezone",e.target.value)}/></label>
@@ -48,12 +64,14 @@ export default function DemoTimetable({courseId}:{courseId:string}) {
       </div>
     </form>
     {aiOpen && <div className="course-card stack">
-      <label className="field">Scheduling instructions<textarea maxLength={1400} rows={3} value={instructions} onChange={e=>setInstructions(e.target.value)} placeholder="For example, two 50-minute sessions, Tuesday and Thursday after 2:15 PM."/></label>
+      <MarkdownEditor label="Scheduling instructions" compact maxLength={1400} rows={3} value={instructions} onChange={setInstructions} placeholder="For example, two 50-minute sessions, Tuesday and Thursday after 2:15 PM."/>
+      {(!form.startsOn || !form.endsOn) && <p className="muted">Choose the first and last dates above, then ask for suggestions.</p>}
       <div><button className="button small primary" disabled={busy || !instructions.trim() || !form.startsOn || !form.endsOn} onClick={()=>void run(async()=>{
         const data=await api<{events:Slot[]}>(path+"/suggest",{method:"POST",body:jsonBody({instructions,startsOn:form.startsOn,endsOn:form.endsOn,timezone:form.timezone})});
         setSuggestions(data.events);
         if(!data.events.length)setError("No suggestions fit those instructions. Try changing the constraints.");
       })}>{busy?"Working…":"Suggest times"}</button></div>
+      {suggestions.length>0 && <p className="muted">Review each suggestion. “Use in form” copies it into the form above so you can adjust the day and time before saving.</p>}
       {suggestions.map((event,i)=><div className="row" key={i}><span>{event.title} · {days[event.weekday-1]} · {event.startTime}–{event.endTime}</span>
         <button className="button small" onClick={()=>{setEditing(null);setForm(event);}}>Use in form</button></div>)}
     </div>}

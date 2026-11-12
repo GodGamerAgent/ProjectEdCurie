@@ -329,3 +329,54 @@ h3 { margin-bottom:8px; font-size:1.12rem; letter-spacing:-.025em; }
 
 .demo-code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
 button[aria-pressed="true"] { border-color: #b9cfff; background: #354672; }
+
+/* Shared live Markdown editor */
+.markdown-editor { min-width:0; }
+.markdown-editor.full { grid-column:1/-1; }
+.markdown-editor-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.markdown-editor-tools { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+.md-tool { min-width:30px; height:28px; padding:0 8px; border:1px solid rgba(255,255,255,.18); border-radius:8px; background:rgba(255,255,255,.07); color:var(--ink); font:500 .74rem var(--mono); cursor:pointer; }
+.md-tool:hover { background:rgba(255,255,255,.16); }
+.md-tool[aria-pressed="true"] { background:var(--blue); color:var(--blue-ink); border-color:transparent; }
+.md-view { display:inline-flex; gap:4px; margin-left:6px; padding-left:8px; border-left:1px solid rgba(255,255,255,.18); }
+.markdown-editor-body { display:grid; gap:10px; }
+.markdown-editor-body.view-split { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+.markdown-editor-body textarea { font-family:var(--mono); font-size:.86rem; min-height:90px; }
+.markdown-editor-preview { min-height:90px; max-height:640px; overflow:auto; padding:12px 14px; border:1px dashed rgba(255,255,255,.22); border-radius:14px; background:rgba(8,11,28,.35); }
+.markdown table { border-collapse:collapse; margin:.8em 0; display:block; overflow-x:auto; }
+.markdown th, .markdown td { border:1px solid rgba(255,255,255,.22); padding:.35em .7em; }
+.markdown ul.contains-task-list { list-style:none; padding-left:1.1em; }
+.markdown pre { overflow-x:auto; padding:.8em 1em; border-radius:10px; background:#0b0f22; }
+.markdown .katex-display { overflow-x:auto; overflow-y:hidden; padding:.2em 0; }
+
+/* Processing modes, bank and summary */
+.mode-picker { border:1px solid rgba(255,255,255,.18); border-radius:16px; padding:12px 14px; display:grid; gap:8px; margin:0; }
+.mode-option { display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
+.mode-option > span { display:grid; gap:2px; font-size:.86rem; }
+.mode-option input { margin-top:4px; }
+.card-actions.tight { margin-top:0; gap:6px; }
+.badge.violet { color:#1b1236; background:#cfc3ff; border-color:transparent; }
+.summary-panel { border-top:1px solid rgba(255,255,255,.12); padding-top:12px; }
+.summary-body { max-height:520px; overflow:auto; padding:4px 2px; }
+.select-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.sticky-actions { position:sticky; top:8px; z-index:2; padding:10px 14px; border-radius:14px; background:rgba(20,24,52,.92); border:1px solid rgba(255,255,255,.2); }
+.test-row { display:grid; gap:8px; padding:10px; border:1px solid rgba(255,255,255,.12); border-radius:12px; }
+.test-row input, .test-row select { padding:.35rem .5rem; border-radius:8px; border:1px solid rgba(255,255,255,.22); background:rgba(255,255,255,.08); color:var(--ink); }
+.test-row select option, .time-control select option { color:#17162b; background:#fff; }
+.time-control { border:0; padding:0; margin:0; }
+.time-control select { padding:.6rem .7rem; border-radius:12px; border:1px solid rgba(255,255,255,.22); background:rgba(255,255,255,.08); color:var(--ink); }
+
+/* Coding IDE */
+.code-editor { min-width:0; }
+.code-editor .cm-editor { max-height:70vh; }
+.ide-layout { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:18px; align-items:start; }
+.ide-problem { padding:16px; border:1px solid rgba(255,255,255,.14); border-radius:18px; background:rgba(16,19,43,.26); max-height:80vh; overflow:auto; }
+.run-output { margin:4px 0 0; padding:8px 10px; border-radius:10px; background:#0b0f22; font:.78rem/1.5 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; max-height:260px; overflow:auto; }
+.error-output { color:#ffd3d8; border:1px solid rgba(255,181,189,.35); }
+.io-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; }
+.test-results { display:grid; gap:8px; }
+.test-result { padding:8px 12px; border:1px solid rgba(255,255,255,.14); border-radius:12px; }
+.test-result summary { cursor:pointer; font-size:.86rem; }
+@media (max-width: 860px) {
+  .markdown-editor-body.view-split, .ide-layout { grid-template-columns:1fr; }
+}

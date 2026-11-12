@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, jsonBody } from "./api";
 import ResourceReview from "./ResourceReview";
+import MarkdownEditor from "./MarkdownEditor";
 export type Resource = { id: string; title: string; status: string; extractionStatus?: string; text?: string; hasFile: boolean; version?:number };
 
 export function ResourceEditor({ resource, busy, refresh, onPublish, onArchive }: {
@@ -80,14 +81,13 @@ export function ResourceEditor({ resource, busy, refresh, onPublish, onArchive }
       </div>)}
     </div>}
     {preview && <ResourceReview title={`${preview.title} · v${preview.version}`} text={preview.text} onClose={() => setPreview(null)} />}
-    {editing && <ResourceReview title="Review course resource" text={text} onClose={() => setEditing(false)}>
+    {editing && <ResourceReview title="Review course resource" text={text} showPreview={false} onClose={() => setEditing(false)}>
       <form className="stack" onSubmit={save}>
         <div className="field"><label htmlFor={`resource-edit-title-${resource.id}`}>Title</label>
           <input id={`resource-edit-title-${resource.id}`} value={title} maxLength={200} required disabled={saving} onChange={event => { setSaveMessage(""); setTitle(event.target.value); }} />
         </div>
-        <div className="field"><label htmlFor={`resource-edit-text-${resource.id}`}>Resource Markdown</label>
-          <textarea id={`resource-edit-text-${resource.id}`} value={text} maxLength={500000} required disabled={saving} onChange={event => { setSaveMessage(""); setText(event.target.value); }} />
-        </div>
+        <MarkdownEditor label="Resource Markdown (source material)" value={text} rows={22} maxLength={500000} required disabled={saving}
+          onChange={value => { setSaveMessage(""); setText(value); }} />
         {published && <p className="muted">Saving edits creates a draft. Publish it again to make it available to students.</p>}
         {error && <p className="notice error" role="alert">{error}</p>}
         {saveMessage && <p className="notice success" role="status">{saveMessage}</p>}

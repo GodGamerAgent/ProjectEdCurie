@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, jsonBody } from "./api";
 import Markdown from "./Markdown";
+import MarkdownEditor from "./MarkdownEditor";
 import ResourceReview from "./ResourceReview";
+import CodingPractice, { type StudentCoding } from "./CodingPractice";
 
+const CodeEditor = lazy(() => import("./CodeEditor"));
 type Topic={id:string;title:string};
-type Material={id:string;title:string;text:string;hasFile:boolean};
+type Material={id:string;title:string;text:string;summary:string;hasFile:boolean};
+type PracticeQuestion={id:string;resourceId:string;origin:string;kind:"text"|"coding";prompt:string;sourceRef:string;coding:StudentCoding|null};
+const originText=(q:PracticeQuestion)=>q.kind==="coding"?"Coding exercise":q.origin==="extracted"?"From the course material":q.origin==="theory"?"AI-generated from theory":q.origin==="manual"?"Added by your teacher":"Practice question";
 type CourseState={
   course:{title:string}; revision:number|null; completed:boolean; score:number|null; total:number|null;
   questions:{id:string;kind:"academic"|"preferences";prompt:string}[]; topics:Topic[]; message:string;
@@ -15,10 +20,13 @@ type TutorReply={reply:string;suggestions:string[];coding:boolean;transcript:str
 function TopicTutor({base,topic,onBack}:{base:string;topic:Topic;onBack:()=>void}) {
   const path=base+"/topics/"+topic.id;
   const [resources,setResources]=useState<Material[]>([]);
+  const [questions,setQuestions]=useState<PracticeQuestion[]>([]);
+  const [question,setQuestion]=useState<PracticeQuestion|null>(null);
   const [selected,setSelected]=useState("");
   const [section,setSection]=useState(0);
   const [preview,setPreview]=useState(false);
   const [mode,setMode]=useState<"learn"|"practice"|null>(null);
+  const [tab,setTab]=useState<"learn"|"practice"|null>(null);
   const [turns,setTurns]=useState<Turn[]>([]);
   const [suggestions,setSuggestions]=useState<string[]>([]);
   const [draft,setDraft]=useState("");
@@ -39,8 +47,8 @@ function TopicTutor({base,topic,onBack}:{base:string;topic:Topic;onBack:()=>void
   useEffect(()=>{
     active.current=true;
     let cancelled=false;
-    void api<{resources:Material[]}>(path).then(data=>{
-      if(!cancelled){setResources(data.resources);setSelected(data.resources[0]?.id||"");}
+    void api<{resources:Material[];questions:PracticeQuestion[]}>(path).then(data=>{
+      if(!cancelled){setResources(data.resources);setQuestions(data.questions);setSelected(data.resources[0]?.id||"");}
     }).catch(e=>{if(!cancelled)setError(e.message);});
     return ()=>{
       active.current=false;cancelled=true;
@@ -80,12 +88,13 @@ function TopicTutor({base,topic,onBack}:{base:string;topic:Topic;onBack:()=>void
     }
   }
 
-  async function send(nextMode:"learn"|"practice",message:string,start=false,includeCode=false) {
+  async function send(nextMode:"learn"|"practice",message:string,start=false,includeCode=false,practice:PracticeQuestion|null=question) {
     if(busy || recording || !selected)return;
     setBusy(true);setError("");setMode(nextMode);
     if(start){setTurns([]);setSuggestions([]);}
     const payload=new FormData();
     payload.set("mode",nextMode);payload.set("resourceId",selected);payload.set("section",String(section));
+    if(nextMode==="practice" && practice)payload.set("questionId",practice.id);
     const history = start ? [] : turns.slice(-6).map(t => ({ ...t, text: t.text.slice(0,2800) }));
     payload.set("history",JSON.stringify(history));
     payload.set("message",message);
@@ -112,38 +121,65 @@ function TopicTutor({base,topic,onBack}:{base:string;topic:Topic;onBack:()=>void
     if(draft.trim() || includeCode || photo || audio)void send(mode,draft.trim(),false,includeCode);
   }
   const resource=resources.find(r=>r.id===selected);
+  const material=resource?(resource.summary.trim()||resource.text):"";
+  const sectionCount=Math.max(1,Math.ceil(material.length/4400));
+  const resourceQuestions=questions.filter(q=>q.resourceId===selected);
+  const reset=()=>{setMode(null);setTurns([]);setSuggestions([]);setQuestion(null);setTab(null);};
+  if(tab==="practice" && question?.kind==="coding" && question.coding) {
+    return <CodingPractice path={base} questionId={question.id} coding={question.coding} onBack={()=>setQuestion(null)}/>;
+  }
   return <section className="stack">
     <div className="row"><h2>{topic.title}</h2><button className="button small" onClick={onBack}>All topics</button></div>
     {error && <p className="notice error" role="alert">{error}</p>}
     <div className="form-grid">
-      <label className="field">Course resource<select value={selected} disabled={busy || recording} onChange={e=>{setSelected(e.target.value);setSection(0);setMode(null);setTurns([]);setSuggestions([]);}}>
+      <label className="field">Course resource<select value={selected} disabled={busy || recording} onChange={e=>{setSelected(e.target.value);setSection(0);reset();}}>
         {resources.map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select></label>
-      {resource && Math.ceil(resource.text.length/4400)>1 && <label className="field">Resource section<select value={section} disabled={busy || recording}
+      {resource && sectionCount>1 && <label className="field">Resource section<select value={section} disabled={busy || recording}
         onChange={e=>{setSection(Number(e.target.value));setMode(null);setTurns([]);setSuggestions([]);}}>
-        {Array.from({length:Math.ceil(resource.text.length/4400)},(_,i)=><option key={i} value={i}>Section {i+1}</option>)}
+        {Array.from({length:sectionCount},(_,i)=><option key={i} value={i}>Section {i+1}</option>)}
       </select></label>}
     </div>
     <div className="card-actions">
-      <button className="button primary" disabled={!selected || busy || recording} onClick={()=>void send("learn","",true)}>Learn</button>
-      <button className="button" disabled={!selected || busy || recording} onClick={()=>void send("practice","",true)}>Practice</button>
-      <button className="button small" disabled={!resource} onClick={()=>setPreview(true)}>Preview resource</button>
+      <button className="button primary" aria-pressed={tab==="learn"} disabled={!selected || busy || recording} onClick={()=>{setTab("learn");setQuestion(null);void send("learn","",true);}}>Learn</button>
+      <button className="button" aria-pressed={tab==="practice"} disabled={!selected || busy || recording} onClick={()=>{setTab("practice");setQuestion(null);setMode(null);setTurns([]);setSuggestions([]);}}>Practice</button>
+      <button className="button small" disabled={!resource} onClick={()=>setPreview(true)}>Preview source material</button>
     </div>
+    {tab==="learn" && resource?.summary.trim() && <details className="course-card" open={turns.length===0}><summary><strong>Resource summary</strong></summary><div className="summary-body"><Markdown text={resource.summary}/></div></details>}
+    {tab==="practice" && !question && <section className="stack">
+      <h3>Practice questions</h3>
+      {resourceQuestions.length===0 && <p className="muted">Your teacher has not added practice questions for this resource yet. The tutor can still set you a problem from the material.</p>}
+      {resourceQuestions.map((q,i)=><article className="course-card stack" key={q.id}>
+        <div className="card-actions tight"><span className="badge">{originText(q)}</span>{q.sourceRef && <span className="badge">Source: {q.sourceRef}</span>}
+          {q.coding && <span className="badge">{q.coding.language==="python"?"Python 3":"JavaScript"}</span>}</div>
+        <Markdown text={q.kind==="coding"?q.prompt.split("\n").slice(0,6).join("\n"):q.prompt}/>
+        <div><button className="button small primary" disabled={busy || recording} onClick={()=>{
+          setQuestion(q);
+          if(q.kind==="text")void send("practice",`I want to practise question ${i+1}.`,true,false,q);
+        }}>{q.kind==="coding"?"Open in code editor":"Practise this question"}</button></div>
+      </article>)}
+      <div><button className="button small" disabled={busy || recording} onClick={()=>void send("practice","",true,false,null)}>Ask the tutor for a practice problem</button></div>
+    </section>}
+    {tab==="practice" && question?.kind==="text" && <article className="course-card stack">
+      <div className="row"><span className="badge">{originText(question)}{question.sourceRef?` · ${question.sourceRef}`:""}</span>
+        <button className="button small" onClick={()=>{setQuestion(null);setMode(null);setTurns([]);setSuggestions([]);}}>All practice questions</button></div>
+      <Markdown text={question.prompt}/>
+    </article>}
     {preview && resource && <ResourceReview title={resource.title} text={resource.text} onClose={()=>setPreview(false)}/>}
     <div className="stack" aria-live="polite">
-      {turns.map((turn,i)=><article className="course-card" key={i}><strong>{turn.role==="student"?"You":"EdCurie tutor"}</strong><Markdown text={turn.text}/>{turn.role==="tutor" && resource && <p className="muted">Course source: {resource.title} · Section {section+1}</p>}</article>)}
+      {turns.map((turn,i)=><article className="course-card" key={i}><strong>{turn.role==="student"?"You":"EdCurie tutor"}</strong><Markdown text={turn.text}/>{turn.role==="tutor" && resource && <p className="muted">Course source: {resource.title}{sectionCount>1?` · Section ${section+1}`:""}</p>}</article>)}
       {busy && <p role="status">EdCurie is working on your reply…</p>}
     </div>
     {mode && turns.length>0 && <>
       <div className="card-actions" aria-label="Suggested replies">{suggestions.map((suggestion,i)=><button className="button small" type="button" disabled={busy || recording} key={i} onClick={()=>void send(mode,suggestion)}>{suggestion}</button>)}</div>
       <form className="stack" onSubmit={submit}>
-        <label className="field">Your question or answer<textarea rows={3} maxLength={2000} value={draft} onChange={e=>setDraft(e.target.value)} disabled={busy}/></label>
+        <MarkdownEditor label="Your question or answer" compact rows={3} maxLength={2000} value={draft} onChange={setDraft} disabled={busy}/>
         <label><input type="checkbox" checked={coding} onChange={e=>setCoding(e.target.checked)}/> Use code editor</label>
         {coding && <>
           <label className="field">Language<select value={language} onChange={e=>setLanguage(e.target.value)}>
             {["python","javascript","typescript","java","cpp","c","sql","text"].map(item=><option value={item} key={item}>{item}</option>)}
           </select></label>
-          <label className="field">Code<textarea className="demo-code" rows={10} spellCheck={false} maxLength={2400} value={code} disabled={busy}
-            onChange={e=>setCode(e.target.value)}/></label>
+          <div className="field"><span className="field-label">Code</span><Suspense fallback={<p className="muted">Loading code editor…</p>}>
+            <CodeEditor label="Code for the tutor" language={language} value={code} onChange={value=>setCode(value.slice(0,2400))} minHeight={180}/></Suspense></div>
         </>}
         <div className="form-grid">
           <label className="field">Attach photo<input ref={photoInput} type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={e=>setPhoto(e.target.files?.[0]??null)}/></label>

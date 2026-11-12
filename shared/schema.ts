@@ -55,6 +55,9 @@ export const demoTopics = pgTable("demo_topics", {
 });
 export const resources = pgTable("resources", {
   pdfPages: integer("pdf_pages"),
+  processingMode: text("processing_mode"),
+  summary: text("summary").notNull().default(""),
+  summaryEdited: boolean("summary_edited").notNull().default(false),
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
   topicId: uuid("topic_id").references(() => demoTopics.id),
@@ -76,6 +79,8 @@ export const resourceVersions = pgTable("resource_versions", {
   text: text("text").notNull(),
   status: text("status").notNull(),
   extractionStatus: text("extraction_status").notNull(),
+  processingMode: text("processing_mode"),
+  summary: text("summary").notNull().default(""),
   fileName: text("file_name"),
   mimeType: text("mime_type"),
   fileData: bytes("file_data"),
@@ -494,6 +499,8 @@ export const aiQuestionDrafts = pgTable("ai_question_drafts", {
 
 export const demoResourceAnalyses = pgTable("demo_resource_analyses", {
   inputMode: text("input_mode").notNull().default("text"),
+  processingMode: text("processing_mode"),
+  theoryGenerated: boolean("theory_generated").notNull().default(false),
   resourceId: uuid("resource_id").primaryKey().references(() => resources.id),
   version: integer("version").notNull(),
   parts: jsonb("parts").notNull().default([])
@@ -520,4 +527,33 @@ export const demoAISettings = pgTable("demo_ai_settings", {
   baseUrl: text("base_url").notNull(),
   model: text("model").notNull(),
   pdfMode: text("pdf_mode").notNull()
+});
+
+export const demoResourceQuestions = pgTable("demo_resource_questions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  resourceId: uuid("resource_id").notNull().references(() => resources.id),
+  position: integer("position").notNull().default(0),
+  origin: text("origin").notNull(),
+  kind: text("kind").notNull().default("text"),
+  prompt: text("prompt").notNull(),
+  quote: text("quote").notNull().default(""),
+  sourceRef: text("source_ref").notNull().default(""),
+  answer: text("answer").notNull().default(""),
+  answerSource: text("answer_source").notNull().default("pending"),
+  coding: jsonb("coding"),
+  codingStatus: text("coding_status"),
+  edited: boolean("edited").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+});
+
+export const demoCodeSubmissions = pgTable("demo_code_submissions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  questionId: uuid("question_id").notNull().references(() => demoResourceQuestions.id),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  code: text("code").notNull(),
+  verdict: text("verdict").notNull(),
+  passed: integer("passed").notNull(),
+  total: integer("total").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });

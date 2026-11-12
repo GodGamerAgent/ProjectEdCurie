@@ -1,5 +1,7 @@
 import { demoContentRoutes } from "./routes-demo-content";
 import { demoLearningRoutes } from "./routes-demo-learning";
+import { processingRoutes } from "./resource-processing";
+import { questionRoutes } from "./routes-demo-questions";
 import express, { type Request } from "express";
 import { clerkClient } from "@clerk/express";
 import type { Pool } from "pg";
@@ -46,6 +48,8 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   app.use(materialRoutes(db));
   app.use(planningRoutes(db));
   app.use(demoContentRoutes(db));
+  app.use(processingRoutes(db));
+  app.use(questionRoutes(db));
   app.use(demoLearningRoutes(db));
   app.use("/api", (_req, res) => res.status(404).json({ error: "Not found." }));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

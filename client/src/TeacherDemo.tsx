@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, jsonBody } from "./api";
-import { ResourceEditor, type Resource } from "./DemoResource";
-import ResourceReview from "./ResourceReview";
 import Markdown from "./Markdown";
+import MarkdownEditor from "./MarkdownEditor";
 import DemoTimetable from "./DemoTimetable";
+import { ModePicker, originLabel, TeacherResourceCard, type Material } from "./TeacherResource";
 
 type Topic = {id:string;title:string};
 type Student = {email:string;name:string|null;dateOfBirth:string|null;enrolledOn:string|null};
-type Problem = {prompt:string;answer:string;quote:string};
-type Material = Resource & {topicId:string;sectionCount:number;isPdf:boolean;parts:{page?:number;summary:string;problems:Problem[]}[]|null};
 type Kind = "academic" | "preferences";
 type Question = {id:string;kind:Kind;prompt:string;answer:string};
 type Baseline = {draft:Question[];revision:number;published:boolean;draftVersion:number};
@@ -25,7 +23,7 @@ function Generator({ label, onGenerate, busy }: { label: string; onGenerate:(cou
       onGenerate(Number(form.get("count")),String(form.get("instructions")??""));
     }}>
       <label className="field">Number of questions<input name="count" type="number" required min={1} max={8} defaultValue={2} /></label>
-      <label className="field">Custom instructions<textarea name="instructions" maxLength={1200} rows={2} /></label>
+      <MarkdownEditor label="Custom instructions" name="instructions" compact maxLength={1200} rows={3} placeholder="Optional. For example: focus on recursion, keep it to one step." />
       <div><button className="button small primary" disabled={busy}>Generate</button></div>
     </form>}
   </div>;
@@ -74,52 +72,77 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
   const [kind,setKind]=useState<Kind>("academic");
   const [view,setView]=useState<"bank"|"questions">("bank");
   const [filter,setFilter]=useState("");
-  const add=(question:Omit<Question,"id">)=>setQuestions(q=>[...q,{...question,id:crypto.randomUUID()}]);
-  function generate(kind:Kind,count:number,instructions:string,resourceId?:string,partIndex?:number,problemIndex?:number) {
+  const [selected,setSelected]=useState<Set<string>>(new Set());
+  const [notice,setNotice]=useState("");
+  const bankResources=resources.filter(r=>r.questions.some(q=>q.kind==="text") || r.summary.trim());
+  async function persist(next:Question[],publish=false) {
+    await api(base+"/baseline",{method:"PUT",body:jsonBody({questions:next,publish,draftVersion:baseline.draftVersion})});
+    await reload();
+  }
+  function addToDraft(added:Question[],message:string) {
+    const next=[...questions,...added];
+    setQuestions(next);setView("questions");
+    void run(async()=>{await persist(next);setNotice(message);});
+  }
+  function generate(kind:Kind,count:number,instructions:string,resourceId?:string,questionId?:string) {
     void run(async()=>{
-      const data=await api<{questions:Question[]}>(base+"/questions/generate",{method:"POST",body:jsonBody({kind,count,instructions,resourceId,partIndex,problemIndex})});
-      setQuestions(q=>[...q,...data.questions]);setView("questions");
+      const data=await api<{questions:Question[]}>(base+"/questions/generate",{method:"POST",body:jsonBody({kind,count,instructions,resourceId,questionId})});
+      const next=[...questions,...data.questions];
+      setQuestions(next);setView("questions");
+      await persist(next);
+      setNotice(`${data.questions.length} generated question${data.questions.length>1?"s were":" was"} added to the baseline draft. Review and edit them below.`);
     });
   }
   function save(publish:boolean) {
-    void run(async()=>{
-      await api(base+"/baseline",{method:"PUT",body:jsonBody({questions,publish,draftVersion:baseline.draftVersion})});
-      await reload();
-    });
+    void run(async()=>{await persist(questions,publish);setNotice(publish?"Baseline published.":"Baseline draft saved.");});
   }
+  const update=(id:string,patch:Partial<Question>)=>setQuestions(all=>all.map(x=>x.id===id?{...x,...patch}:x));
   return <section className="stack">
     <div className="row"><h3>Course onboarding</h3><span className="badge">{baseline.published?`Published · revision ${baseline.revision}`:"Draft"}</span></div>
     <div className="card-actions">
       <button className="button small" aria-pressed={view==="bank"} onClick={()=>setView("bank")}>Academic problem bank</button>
       <button className="button small" aria-pressed={view==="questions"} onClick={()=>setView("questions")}>Baseline questions ({questions.length})</button>
     </div>
+    {notice && <p className="notice success" role="status">{notice}</p>}
     {view==="bank" && <>
       <label className="field">Resource<select value={filter} onChange={e=>setFilter(e.target.value)}><option value="">All processed resources</option>
-        {resources.filter(r=>r.parts?.length).map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select></label>
-      {!resources.some(r=>r.parts?.length) && <p>Process a topic resource to populate the academic problem bank.</p>}
-      {resources.filter(r=>!filter || filter===r.id).map(r=>r.parts?.map((part,i)=><article className="resource-card stack" key={r.id+i}>
-        <h4>{r.title} · {part.page?`Page ${part.page}`:`Section ${i+1}`}</h4>
-        {part.problems.length===0 && <p>No problems were found in this section.</p>}
-        {part.problems.map((problem,j)=><div className="course-card stack" key={j}>
+        {bankResources.map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select></label>
+      {!bankResources.length && <p>Process a topic resource to populate the academic problem bank.</p>}
+      {selected.size>0 && <div className="card-actions sticky-actions"><span>{selected.size} selected</span>
+        <button className="button small primary" disabled={busy} onClick={()=>{
+          const chosen=resources.flatMap(r=>r.questions).filter(q=>selected.has(q.id));
+          setSelected(new Set());
+          addToDraft(chosen.map(q=>({id:crypto.randomUUID(),kind:"academic",prompt:q.prompt,answer:q.answer})),`${chosen.length} problem${chosen.length>1?"s":""} added to the baseline draft.`);
+        }}>Add selected to baseline</button>
+        <button className="button small" onClick={()=>setSelected(new Set())}>Clear selection</button></div>}
+      {bankResources.filter(r=>!filter || filter===r.id).map(r=><article className="resource-card stack" key={r.id}>
+        <div className="row"><h4>{r.title}</h4>{r.status!=="published" && <span className="badge amber">Resource not published</span>}</div>
+        {r.summary.trim() && <>
+          <details><summary>View resource summary</summary><div className="summary-body"><Markdown text={r.summary}/></div></details>
+          <Generator label="Generate from this summary" busy={busy} onGenerate={(count,instructions)=>generate("academic",count,instructions,r.id)}/>
+        </>}
+        {r.questions.filter(q=>q.kind==="text").length===0 && <p className="muted">No problems in this resource's bank.</p>}
+        {r.questions.filter(q=>q.kind==="text").map(problem=><div className="course-card stack" key={problem.id}>
+          <label className="select-row"><input type="checkbox" checked={selected.has(problem.id)} onChange={e=>setSelected(old=>{const next=new Set(old);if(e.target.checked)next.add(problem.id);else next.delete(problem.id);return next;})}/>
+            <span className="badge">{originLabel(problem)}</span>{problem.sourceRef && <span className="badge">Source: {problem.sourceRef}</span>}
+            {problem.answerSource==="ai" && <span className="badge amber">AI-proposed answer</span>}</label>
           <Markdown text={problem.prompt}/>
-          {part.page && <details><summary>Extracted source · page {part.page}</summary><Markdown text={problem.quote}/></details>}
-          <div className="card-actions"><button className="button small primary" disabled={busy} onClick={()=>{add({kind:"academic",prompt:problem.prompt,answer:problem.answer});setView("questions");}}>Add to baseline</button>
-          <Generator label="Generate from this problem" busy={busy} onGenerate={(count,instructions)=>generate("academic",count,instructions,r.id,i,j)}/></div>
+          <div className="card-actions"><button className="button small primary" disabled={busy} onClick={()=>addToDraft([{id:crypto.randomUUID(),kind:"academic",prompt:problem.prompt,answer:problem.answer}],"Problem added to the baseline draft.")}>Add to baseline</button>
+          <Generator label="Generate variants from this problem" busy={busy} onGenerate={(count,instructions)=>generate("academic",count,instructions,r.id,problem.id)}/></div>
         </div>)}
-        <details><summary>View section summary</summary><Markdown text={part.summary}/></details>
-        <Generator label="Generate from this summary" busy={busy} onGenerate={(count,instructions)=>generate("academic",count,instructions,r.id,i)}/>
-      </article>))}
+      </article>)}
     </>}
     {view==="questions" && <>
       <Generator label="Generate learning preference questions" busy={busy} onGenerate={(count,instructions)=>generate("preferences",count,instructions)}/>
       <div className="card-actions"><label className="field">Custom question type<select value={kind} onChange={e=>setKind(e.target.value as Kind)}>
         <option value="academic">Academic</option><option value="preferences">Learning preferences</option>
-      </select></label><button className="button small" onClick={()=>add({kind,prompt:"",answer:""})}>Add custom question</button></div>
+      </select></label><button className="button small" onClick={()=>setQuestions(q=>[...q,{id:crypto.randomUUID(),kind,prompt:"",answer:""}])}>Add custom question</button></div>
+      {questions.length===0 && <p className="muted">Add problems from the bank, generate questions, or write your own. Include at least one academic and one learning preference question before publishing.</p>}
       {questions.map((q,i)=><article className="course-card stack" key={q.id}>
-        <strong>{i+1}. {q.kind==="academic"?"Academic":"Learning preferences"}</strong>
-        <label className="field">Question<textarea value={q.prompt} maxLength={5000} onChange={e=>setQuestions(all=>all.map(x=>x.id===q.id?{...x,prompt:e.target.value}:x))}/></label>
-        {q.kind==="academic" && <label className="field">Expected answer<input value={q.answer} maxLength={1500} onChange={e=>setQuestions(all=>all.map(x=>x.id===q.id?{...x,answer:e.target.value}:x))}/></label>}
-        <button className="button small" onClick={()=>setQuestions(all=>all.filter(x=>x.id!==q.id))}>Remove question</button>
+        <strong>{i+1}. {q.kind==="academic"?"Academic":"Learning preferences · open-ended, not scored"}</strong>
+        <MarkdownEditor label="Question" value={q.prompt} maxLength={5000} rows={5} onChange={value=>update(q.id,{prompt:value})}/>
+        {q.kind==="academic" && <MarkdownEditor label="Expected answer" compact value={q.answer} maxLength={1500} rows={3} onChange={value=>update(q.id,{answer:value})}/>}
+        <div><button className="button small" onClick={()=>setQuestions(all=>all.filter(x=>x.id!==q.id))}>Remove question</button></div>
       </article>)}
       <div className="card-actions"><button className="button small" disabled={busy} onClick={()=>save(false)}>Save draft</button>
         <button className="button small primary" disabled={busy} onClick={()=>save(true)}>Publish baseline</button></div>
@@ -135,7 +158,6 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [progress,setProgress]=useState("");
-  const [summary,setSummary]=useState<Material|null>(null);
   const reload=useCallback(async()=>setData(await api<Course>(base+"/teacher")),[base]);
   useEffect(()=>{void reload().catch(e=>setError(e.message));},[reload]);
   async function run(action:()=>Promise<void>) {
@@ -144,19 +166,24 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
     catch(e) {setError(e instanceof Error?e.message:"The action failed.");}
     finally {setBusy(false);setProgress("");}
   }
-  async function processResource(id:string) {
+  async function processResource(id:string,restart=false) {
+    const stages:Record<string,string>={pages:"Reading pages",["theory-questions"]:"Writing practice questions from the theory",answers:"Proposing answers for review",complete:"Finishing"};
     try {
       let remaining:number;
+      let first=true;
       do {
         setProgress("Processing resource with AI…");
-        ({remaining}=await api<{remaining:number}>(`/api/demo/resources/${id}/process`,{method:"POST"}));
-        setProgress(`Processing resource · ${remaining} sections remaining`);
+        const result=await api<{remaining:number;stage:string}>(`/api/demo/resources/${id}/process`,{method:"POST",body:jsonBody({restart:restart&&first})});
+        first=false;
+        remaining=result.remaining;
+        setProgress(`${stages[result.stage]??"Processing"} · ${remaining} step${remaining===1?"":"s"} remaining`);
+        await reload();
       } while(remaining>0);
     } finally { await reload(); }
   }
   const selected=data?.topics.find(topic=>topic.id===topicId);
   return <div className="stack">
-    <div className="row"><div><h2>{data?.course.title||"Course workspace"}</h2><p>{data?.course.description}</p></div><button className="button small" onClick={onBack}>All courses</button></div>
+    <div className="row"><div><h2>{data?.course.title||"Course workspace"}</h2>{data?.course.description && <Markdown text={data.course.description}/>}</div><button className="button small" onClick={onBack}>All courses</button></div>
     <nav className="card-actions" aria-label="Course setup">{["Topics","Onboarding","Timetable","Students"].map(item=><button className="button small" type="button" key={item} aria-pressed={item===tab} disabled={busy} onClick={()=>setTab(item)}>{item}</button>)}</nav>
     {error && <p className="notice error" role="alert">{error}</p>}
     {progress && <p role="status">{progress}</p>}
@@ -185,26 +212,17 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
             });
           }}>
             <label className="field">Resource title<input name="title" required maxLength={200}/></label>
-            <label className="field">PDF, Markdown or text<input name="file" type="file" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain"/></label>
-            <label className="field full">Resource text<textarea name="text" rows={3}/></label>
+            <label className="field">PDF (slides, theory sheets, lab sheets), Markdown or text<input name="file" type="file" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain"/></label>
+            <ModePicker name="processingMode"/>
+            <MarkdownEditor className="full" label="Or paste resource text" name="text" compact rows={4} maxLength={500000}/>
             <div><button className="button small primary" disabled={busy}>Save and process resource</button></div>
           </form>
-          {data.resources.filter(resource=>resource.topicId===topicId).map(resource=><div key={resource.id} className="course-card stack">
-            <ResourceEditor resource={resource} busy={busy} refresh={reload}
-              onPublish={()=>void run(async()=>{await api(`/api/resources/${resource.id}/publish`,{method:"POST"});await reload();})}
-              onArchive={()=>{if(confirm(`Delete ${resource.title} from this topic?`))void run(async()=>{await api(`/api/resources/${resource.id}/archive`,{method:"POST"});await reload();});}}/>
-            <div className="card-actions">
-              <span>{resource.parts?.length||0} of {resource.sectionCount} {resource.isPdf?"pages":"sections"} processed</span>
-              {(resource.parts?.length||0)<resource.sectionCount && <button className="button small" disabled={busy} onClick={()=>void run(()=>processResource(resource.id))}>Process with AI</button>}
-              {!!resource.parts?.length && <button className="button small" onClick={()=>setSummary(resource)}>Review AI summary</button>}
-            </div>
-          </div>)}
+          {data.resources.filter(resource=>resource.topicId===topicId).map(resource=><TeacherResourceCard key={resource.id} resource={resource} busy={busy} run={run} reload={reload} processResource={processResource}/>)}
         </section>}
       </>}
       {tab==="Students" && <Students base={base} students={data.students} run={run} busy={busy} reload={reload}/>}
       <div hidden={tab!=="Onboarding"}><BaselineEditor base={base} resources={data.resources} baseline={data.baseline} run={run} busy={busy} reload={reload}/></div>
       {tab==="Timetable" && <DemoTimetable courseId={courseId}/>}
     </>}
-    {summary && <ResourceReview title={summary.title+" · AI summary"} text={summary.parts?.map((part,i)=>`## ${part.page?`Page ${part.page}`:`Section ${i+1}`}\n\n${part.summary}\n\n### Extracted problems\n\n${part.problems.map(p=>p.prompt).join("\n\n")||"None found."}`).join("\n\n")||""} onClose={()=>setSummary(null)}/>}
   </div>;
 }
