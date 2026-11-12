@@ -8,7 +8,7 @@ import DemoTimetable from "./DemoTimetable";
 type Topic = {id:string;title:string};
 type Student = {email:string;name:string|null;dateOfBirth:string|null;enrolledOn:string|null};
 type Problem = {prompt:string;answer:string;quote:string};
-type Material = Resource & {topicId:string;sectionCount:number;parts:{summary:string;problems:Problem[]}[]|null};
+type Material = Resource & {topicId:string;sectionCount:number;isPdf:boolean;parts:{page?:number;summary:string;problems:Problem[]}[]|null};
 type Kind = "academic" | "preferences";
 type Question = {id:string;kind:Kind;prompt:string;answer:string};
 type Baseline = {draft:Question[];revision:number;published:boolean;draftVersion:number};
@@ -98,10 +98,11 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
         {resources.filter(r=>r.parts?.length).map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select></label>
       {!resources.some(r=>r.parts?.length) && <p>Process a topic resource to populate the academic problem bank.</p>}
       {resources.filter(r=>!filter || filter===r.id).map(r=>r.parts?.map((part,i)=><article className="resource-card stack" key={r.id+i}>
-        <h4>{r.title} · Section {i+1}</h4>
+        <h4>{r.title} · {part.page?`Page ${part.page}`:`Section ${i+1}`}</h4>
         {part.problems.length===0 && <p>No problems were found in this section.</p>}
         {part.problems.map((problem,j)=><div className="course-card stack" key={j}>
           <Markdown text={problem.prompt}/>
+          {part.page && <details><summary>Extracted source · page {part.page}</summary><Markdown text={problem.quote}/></details>}
           <div className="card-actions"><button className="button small primary" disabled={busy} onClick={()=>{add({kind:"academic",prompt:problem.prompt,answer:problem.answer});setView("questions");}}>Add to baseline</button>
           <Generator label="Generate from this problem" busy={busy} onGenerate={(count,instructions)=>generate("academic",count,instructions,r.id,i,j)}/></div>
         </div>)}
@@ -147,7 +148,7 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
     try {
       let remaining:number;
       do {
-        setProgress("Processing resource with Groq…");
+        setProgress("Processing resource with AI…");
         ({remaining}=await api<{remaining:number}>(`/api/demo/resources/${id}/process`,{method:"POST"}));
         setProgress(`Processing resource · ${remaining} sections remaining`);
       } while(remaining>0);
@@ -167,14 +168,19 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
         }}><label className="field">Chapter or topic name<input name="title" required maxLength={200}/></label><div><button className="button small primary" disabled={busy}>Add topic</button></div></form>
         <div className="card-actions">{data.topics.map(topic=><button className="button small" key={topic.id} aria-pressed={topic.id===topicId} onClick={()=>setTopicId(topic.id)}>{topic.title}</button>)}</div>
         {selected && <section className="stack">
-          <h3>{selected.title}</h3>
+          <div className="row"><h3>{selected.title}</h3>
+            <button type="button" className="button small" disabled={busy} onClick={()=>{
+              if (!confirm(`Delete “${selected.title}” and remove all its resources from this course?`)) return;
+              void run(async()=>{await api(base+"/topics/"+selected.id,{method:"DELETE"});setTopicId("");await reload();});
+            }}>Delete topic</button>
+          </div>
           <form key={topicId} className="form-grid" onSubmit={e=>{
             e.preventDefault();const form=e.currentTarget;const upload=new FormData(form);upload.set("topicId",topicId);
             const file=upload.get("file");if(file instanceof File && !file.size)upload.delete("file");
             void run(async()=>{
-              const resource=await api<{id:string;text:string}>(`/api/courses/${courseId}/resources`,{method:"POST",body:upload});
+              const resource=await api<{id:string;text:string;pdfPages:number|null}>(`/api/courses/${courseId}/resources`,{method:"POST",body:upload});
               form.reset();await reload();
-              if(resource.text.trim())await processResource(resource.id);
+              if(resource.pdfPages || resource.text.trim())await processResource(resource.id);
               else setError("The file was saved. Add readable text in Review and edit, then process the resource.");
             });
           }}>
@@ -188,7 +194,7 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
               onPublish={()=>void run(async()=>{await api(`/api/resources/${resource.id}/publish`,{method:"POST"});await reload();})}
               onArchive={()=>{if(confirm(`Delete ${resource.title} from this topic?`))void run(async()=>{await api(`/api/resources/${resource.id}/archive`,{method:"POST"});await reload();});}}/>
             <div className="card-actions">
-              <span>{resource.parts?.length||0} of {resource.sectionCount} sections processed</span>
+              <span>{resource.parts?.length||0} of {resource.sectionCount} {resource.isPdf?"pages":"sections"} processed</span>
               {(resource.parts?.length||0)<resource.sectionCount && <button className="button small" disabled={busy} onClick={()=>void run(()=>processResource(resource.id))}>Process with AI</button>}
               {!!resource.parts?.length && <button className="button small" onClick={()=>setSummary(resource)}>Review AI summary</button>}
             </div>
@@ -199,6 +205,6 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
       <div hidden={tab!=="Onboarding"}><BaselineEditor base={base} resources={data.resources} baseline={data.baseline} run={run} busy={busy} reload={reload}/></div>
       {tab==="Timetable" && <DemoTimetable courseId={courseId}/>}
     </>}
-    {summary && <ResourceReview title={summary.title+" · AI summary"} text={summary.parts?.map((part,i)=>`## Section ${i+1}\n\n${part.summary}\n\n### Extracted problems\n\n${part.problems.map(p=>p.prompt).join("\n\n")||"None found."}`).join("\n\n")||""} onClose={()=>setSummary(null)}/>}
+    {summary && <ResourceReview title={summary.title+" · AI summary"} text={summary.parts?.map((part,i)=>`## ${part.page?`Page ${part.page}`:`Section ${i+1}`}\n\n${part.summary}\n\n### Extracted problems\n\n${part.problems.map(p=>p.prompt).join("\n\n")||"None found."}`).join("\n\n")||""} onClose={()=>setSummary(null)}/>}
   </div>;
 }

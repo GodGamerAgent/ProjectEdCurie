@@ -47,12 +47,14 @@ export const enrollments = pgTable("enrollments", {
   enrolledOn: date("enrolled_on")
 }, (table) => [uniqueIndex("enrollments_unique").on(table.courseId, table.email)]);
 export const demoTopics = pgTable("demo_topics", {
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(() => courses.id),
   title: text("title").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 export const resources = pgTable("resources", {
+  pdfPages: integer("pdf_pages"),
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
   topicId: uuid("topic_id").references(() => demoTopics.id),
@@ -491,6 +493,7 @@ export const aiQuestionDrafts = pgTable("ai_question_drafts", {
 });
 
 export const demoResourceAnalyses = pgTable("demo_resource_analyses", {
+  inputMode: text("input_mode").notNull().default("text"),
   resourceId: uuid("resource_id").primaryKey().references(() => resources.id),
   version: integer("version").notNull(),
   parts: jsonb("parts").notNull().default([])
@@ -511,3 +514,10 @@ export const demoOnboardings = pgTable("demo_onboardings", {
   total: integer("total").notNull(),
   submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull()
 }, t => [uniqueIndex("demo_onboardings_course_user_revision").on(t.courseId, t.userId, t.revision)]);
+
+export const demoAISettings = pgTable("demo_ai_settings", {
+  id: text("id").primaryKey(),
+  baseUrl: text("base_url").notNull(),
+  model: text("model").notNull(),
+  pdfMode: text("pdf_mode").notNull()
+});

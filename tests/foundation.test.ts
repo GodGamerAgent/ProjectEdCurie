@@ -22,10 +22,11 @@ function samplePdf() {
   const stream = "BT /F1 12 Tf 72 720 Td (Test lesson from page one.) Tj ET";
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
   ];
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
@@ -94,33 +95,39 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
   const upload=await request(app).post(`/api/courses/${courseId}/resources`).set(teacher)
     .field("title","Lab sheet").field("topicId",topic.body.id).attach("file",original,{filename:"notes.pdf",contentType:"application/pdf"});
   expect(upload.status).toBe(201);
-  expect(upload.body.text).toContain("Test lesson from page one.");
+  expect(upload.body).toMatchObject({text:"",pdfPages:2});
   const resourceId=upload.body.id;
   expect((await db.query("SELECT file_data FROM resources WHERE id=$1",[resourceId])).rows[0].file_data).toEqual(original);
   const excerpt="Exercise: What is the next term of 2, 4, 6?";
-  const notes="# Sequences\n\nAn arithmetic sequence has a constant difference.\n\n"+excerpt;
-  expect((await request(app).patch(`/api/resources/${resourceId}`).set(teacher).send({title:"Lab sheet",text:notes})).status).toBe(200);
-  const versions=(await request(app).get(`/api/resources/${resourceId}/versions`).set(teacher)).body.versions;
-  const versionUrl=`/api/resources/${resourceId}/versions/${versions[0].id}`;
-  expect((await request(app).get(versionUrl).set(teacher)).body.text).toBe(notes);
-  expect((await request(app).get(versionUrl).set(student)).status).toBe(403);
-  expect((await request(app).post(`/api/resources/${resourceId}/publish`).set(teacher)).status).toBe(200);
-  expect((await studentView()).body.message).toBe("Your institute is preparing the baseline assessment");
-  expect((await request(app).get(path).set(student)).status).toBe(403);
+  const summary="An arithmetic sequence has a constant difference.";
+  const prompt="Find the next term of 2, 4, 6.";
+  const notes=`## Page 1\n\n${summary}\n\n### Problems\n\n${prompt}\n\n## Page 2\n\nReview the common difference.`;
+  const admin=as("admin"),settingsUrl="/api/admin/ai/status";
   const provider=vi.fn(async (url:string,init:RequestInit)=>{
     if(url.endsWith("/audio/transcriptions")) {
       expect((init.body as FormData).get("model")).toBe("whisper-large-v3-turbo");
       return new Response(JSON.stringify({text:"How do I find the common difference?"}));
     }
     const body=JSON.parse(String(init.body));
-    expect(body.model).toBe("qwen/qwen3.8-27b");
+    const native=url.startsWith("https://provider.example/v1/");
+    expect(body.model).toBe(native?"pdf-vision-model":"qwen/qwen3.8-27b");
     const system:string=body.messages[0].content;
     const input=body.messages[1].content;
     const data=JSON.parse(typeof input==="string"?input:input[0].text);
     let result:unknown;
-    if (system.startsWith("Summarize")) {
-      expect(data.excerpt).toContain(excerpt);
-      result={summary:"Add the same difference at every step.",problems:[{prompt:"Find the next term of 2, 4, 6.",answer:"8",quote:excerpt}]};
+    if (system.startsWith("Review the actual PDF")) {
+      expect(data.excerpt).toBeUndefined();
+      if (native) {
+        expect(input[1].file.file_data).toBe("data:application/pdf;base64,"+original.toString("base64"));
+        expect((init.headers as Record<string,string>).Authorization).toBe("Bearer custom-test-key");
+      } else {
+        expect(input[1].image_url.url).toMatch(/^data:image\/png;base64,iVBOR/);
+      }
+      const pages=[
+        {page:1,summary,problems:[{prompt,answer:"",quote:excerpt}]},
+        {page:2,summary:"Review the common difference.",problems:[]},
+      ];
+      result={pages:native?pages:[pages[data.expectedPages[0]-1]]};
     } else if(system.startsWith("Create exactly")) {
       if (data.basis.problem) {
         expect(data.basis.problem.prompt).toContain("next term");
@@ -144,11 +151,32 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
     return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(result)}}]}));
   });
   vi.stubEnv("GROQ_API_KEY","test-key");
+  vi.stubEnv("AI_PROVIDER_BASE_URL","https://provider.example/v1");
+  vi.stubEnv("AI_PROVIDER_API_KEY","custom-test-key");
   vi.stubGlobal("fetch",provider);
   try {
-    expect((await request(app).post(`/api/demo/resources/${resourceId}/process`).set(teacher)).body.remaining).toBe(0);
+    const processPdf=()=>request(app).post(`/api/demo/resources/${resourceId}/process`).set(teacher);
+    expect((await processPdf()).body.remaining).toBe(1);
+    expect((await teacherView()).body.resources[0].text).toBe("");
+    expect((await processPdf()).body.remaining).toBe(0);
     const processed=(await teacherView()).body.resources[0];
     expect(processed.parts[0].problems[0].quote).toBe(excerpt);
+    expect(processed.text).toBe(notes);
+    const settings={baseUrl:"https://provider.example/v1",model:"pdf-vision-model",pdfMode:"file"};
+    expect((await request(app).put(settingsUrl).set(teacher).send(settings)).status).toBe(403);
+    expect((await request(app).put(settingsUrl).set(admin).send({...settings,baseUrl:"https://unknown.example/v1"})).status).toBe(400);
+    const savedSettings=await request(app).put(settingsUrl).set(admin).send(settings);
+    expect(savedSettings.body).toEqual({...settings,configured:true});
+    expect((await request(app).post(`/api/demo/resources/${resourceId}/process`).set(teacher)).body.remaining).toBe(0);
+    expect(provider).toHaveBeenCalledTimes(3);
+    expect((await request(app).put(settingsUrl).set(admin).send({baseUrl:"https://api.groq.com/openai/v1",model:"qwen/qwen3.8-27b",pdfMode:"vision"})).status).toBe(200);
+    const versions=(await request(app).get(`/api/resources/${resourceId}/versions`).set(teacher)).body.versions;
+    const versionUrl=`/api/resources/${resourceId}/versions/${versions[0].id}`;
+    expect((await request(app).get(versionUrl).set(teacher)).body.text).toBe(notes);
+    expect((await request(app).get(versionUrl).set(student)).status).toBe(403);
+    expect((await request(app).post(`/api/resources/${resourceId}/publish`).set(teacher)).status).toBe(200);
+    expect((await studentView()).body.message).toBe("Your institute is preparing the baseline assessment");
+    expect((await request(app).get(path).set(student)).status).toBe(403);
     const generate=(data:object)=>request(app).post(base+"/questions/generate").set(teacher).send(data);
     const academic=await generate({kind:"academic",count:1,instructions:"Use a simple sequence",resourceId,partIndex:0,problemIndex:0});
     const preferences=await generate({kind:"preferences",count:1});
@@ -179,7 +207,10 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
     expect(event.status).toBe(201);
     expect((await request(app).patch(timetable+"/"+event.body.event.id).set(teacher).send({...schedule.body.events[0],startTime:"14:16"})).status).toBe(200);
     expect((await request(app).get(`/api/courses/${courseId}/mocks/history`).set(student)).status).toBe(404);
-    expect((await request(app).post(`/api/resources/${resourceId}/archive`).set(teacher)).status).toBe(200);
+    expect((await request(app).delete(path).set(student)).status).toBe(403);
+    expect((await request(app).delete(path).set(teacher)).status).toBe(204);
+    expect((await teacherView()).body).toMatchObject({topics:[],resources:[]});
+    expect((await request(app).post(`/api/resources/${resourceId}/publish`).set(teacher)).status).toBe(404);
     expect((await request(app).get(path).set(student)).status).toBe(403);
     expect((await request(app).delete(base+"/students/"+encodeURIComponent(enrollment.email)).set(teacher)).status).toBe(204);
     expect((await studentView()).status).toBe(403);

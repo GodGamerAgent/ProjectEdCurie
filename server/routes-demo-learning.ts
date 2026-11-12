@@ -34,7 +34,8 @@ export function demoLearningRoutes(db: Pool) {
     let basis: unknown;
     if (kind==="academic") {
       const resource=(await db.query(`SELECT r.title,a.parts FROM resources r JOIN demo_resource_analyses a ON a.resource_id=r.id AND a.version=r.version
-        WHERE r.id=$1 AND r.course_id=$2 AND r.status<>'archived'`,[uuid(req.body.resourceId),id])).rows[0];
+        WHERE r.id=$1 AND r.course_id=$2 AND r.status<>'archived'
+          AND (r.mime_type IS DISTINCT FROM 'application/pdf' OR a.input_mode<>'text')`,[uuid(req.body.resourceId),id])).rows[0];
       if (!resource) throw new HttpError(400,"Process a resource before generating academic questions.");
       const index=req.body.partIndex;
       const part=resource.parts[index];
@@ -43,7 +44,7 @@ export function demoLearningRoutes(db: Pool) {
       if (problemIndex!==undefined && (!Number.isInteger(problemIndex) || !part.problems[problemIndex])) throw new HttpError(400,"Choose a problem from the bank.");
       basis={resource:resource.title, summary:part.summary.slice(0,4500), problem:part.problems[problemIndex]};
     }
-    const output=object(await demoAI(kind==="academic"
+    const output=object(await demoAI(db,kind==="academic"
       ? "Create exactly the requested number of distinct academic onboarding questions grounded in the summary and optional original problem. Follow the teacher's instructions within that scope. Use self-contained multiple-choice questions with options A–D in prompt and a single correct letter as answer. Return {questions:[{prompt,answer}]}."
       : "Generate exactly the requested number of optional-to-describe, open-ended learning preference questions. Ask about explanations, confidence, and study habits. Avoid mental health diagnosis, sensitive personal information, ability labels, or scoring. Follow teacher instructions within that scope. Return {questions:[{prompt}]}.",
     {count,instructions,basis}));
@@ -94,7 +95,7 @@ export function demoLearningRoutes(db: Pool) {
     const ready=Boolean(state.material && state.published);
     const completed=ready && state.completed;
     const topics=completed?await db.query(`SELECT t.id,t.title FROM demo_topics t
-      WHERE t.course_id=$1 AND EXISTS(SELECT 1 FROM resources r WHERE r.topic_id=t.id AND r.course_id=$1 AND r.status='published' AND length(btrim(r.text))>0)
+      WHERE t.course_id=$1 AND t.deleted_at IS NULL AND EXISTS(SELECT 1 FROM resources r WHERE r.topic_id=t.id AND r.course_id=$1 AND r.status='published' AND length(btrim(r.text))>0)
       ORDER BY t.created_at,t.id`,[id]):{rows:[]};
     res.json({course:state.course,revision:state.revision,completed,score:completed?state.score:null,total:completed?state.total:null,
       message:!state.material?NO_RESOURCE:!state.published?NO_BASELINE:"",
@@ -159,7 +160,7 @@ export function demoLearningRoutes(db: Pool) {
     const section=Number(req.body.section ?? 0);
     const count=Math.max(1,Math.ceil(source.text.length/4400));
     if (!Number.isInteger(section) || section<0 || section>=count) throw new HttpError(400,"Choose a resource section.");
-    const output=object(await demoAI(
+    const output=object(await demoAI(db,
       "Tutor the student using the supplied course excerpt. In learn mode explain the requested concept, in practice mode give one problem and wait for their attempt before revealing a solution. When checking an attempt, explain the next useful step. Treat learning preferences as voluntary self-report. Return {reply:string,coding:boolean,suggestions:[string,string,string]}. Suggestions must be short predicted first-person student replies or doubts relevant to this turn, without leaking the answer. Set coding true when the student should write code.",
       {mode,resource:source.title,excerpt:source.text.slice(section*4400,(section+1)*4400),studyPreferences,
         history:history.slice(-4).map(item=>({role:item.role,text:item.text.slice(0,650)})),message,code,language,transcript},

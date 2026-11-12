@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { PDFParse } from "pdf-parse";
+import { pdfPageCount } from "./pdf-input";
 import type { Pool } from "pg";
 import { HttpError } from "./auth";
 import { cleanString, currentUser, teacherCourse, uuid } from "./access";
@@ -20,14 +20,12 @@ export function materialRoutes(db: Pool) {
     try { await teacherCourse(db, currentUser(res), String(req.params.id)); next(); } catch (error) { next(error); }
   }, upload.single("file"), async (req, res) => {
     const topicId = uuid(cleanString(req.body.topicId, "Topic", 36));
-    if (!(await db.query("SELECT 1 FROM demo_topics WHERE id=$1 AND course_id=$2", [topicId,req.params.id])).rowCount) {
-      throw new HttpError(400, "Choose a topic in this course.");
-    }
     const title = cleanString(databaseText(req.body.title), "Resource title", 200);
     let text = databaseText(req.body.text);
     if (text.length > 500_000) throw new HttpError(400, "Resource text is too long.");
     let extraction = text.trim() ? "manual" : "pending";
     let mime: string | null = null;
+    let pdfPages: number | null = null;
     if (req.file) {
       const isPdf = req.file.buffer.subarray(0, 5).toString() === "%PDF-";
       const isMarkdown = /\.(md|markdown)$/i.test(req.file.originalname) &&
@@ -35,16 +33,12 @@ export function materialRoutes(db: Pool) {
       const isText = (isMarkdown || req.file.mimetype === "text/plain") && !req.file.buffer.includes(0);
       if (!isPdf && !isText) throw new HttpError(400, "Upload a PDF, Markdown, or plain text file.");
       mime = isPdf ? "application/pdf" : isMarkdown ? "text/markdown; charset=utf-8" : "text/plain";
-      if (!text.trim()) {
+      if (isPdf) {
+        pdfPages = await pdfPageCount(req.file.buffer);
+        extraction = "pending";
+      } else if (!text.trim()) {
         try {
-          if (isPdf) {
-            const parser = new PDFParse({ data: req.file.buffer });
-            try {
-              const result = await parser.getText();
-              text = result.pages.map((page) => `[Page ${page.num}]\n${databaseText(page.text).trim()}`).join("\n\n").trim();
-              if (!result.pages.some((page) => databaseText(page.text).trim())) text = "";
-            } finally { await parser.destroy(); }
-          } else text = new TextDecoder("utf-8", { fatal: true }).decode(req.file.buffer);
+          text = new TextDecoder("utf-8", { fatal: true }).decode(req.file.buffer);
           extraction = text.trim() ? "complete" : "error";
         } catch { extraction = "error"; }
       }
@@ -55,13 +49,15 @@ export function materialRoutes(db: Pool) {
       text = "";
       extraction = "error";
     }
-    if (!text.trim()) { text = ""; extraction = "error"; }
+    if (!text.trim() && !pdfPages) { text = ""; extraction = "error"; }
     const user=currentUser(res),client=await db.connect();
     try{
       await client.query("BEGIN");
-      const result = await client.query(`INSERT INTO resources (course_id,title,text,extraction_status,file_name,mime_type,file_data,topic_id)
-        VALUES ($1,$2,$3,$4,$5,$6,decode($7,'base64'),$8) RETURNING id,title,status,extraction_status AS "extractionStatus",text,version`,
-        [req.params.id, title, text, extraction, databaseText(req.file?.originalname).trim() || null, mime, req.file?.buffer.toString("base64") ?? null,topicId]);
+      const topic=await client.query("SELECT 1 FROM demo_topics WHERE id=$1 AND course_id=$2 AND deleted_at IS NULL FOR SHARE",[topicId,req.params.id]);
+      if (!topic.rowCount) throw new HttpError(400,"Choose an active topic in this course.");
+      const result = await client.query(`INSERT INTO resources (course_id,title,text,extraction_status,file_name,mime_type,file_data,topic_id,pdf_pages)
+        VALUES ($1,$2,$3,$4,$5,$6,decode($7,'base64'),$8,$9) RETURNING id,title,status,extraction_status AS "extractionStatus",text,version,pdf_pages AS "pdfPages"`,
+        [req.params.id, title, text, extraction, databaseText(req.file?.originalname).trim() || null, mime, req.file?.buffer.toString("base64") ?? null,topicId,pdfPages]);
       const resource=result.rows[0];
       await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by)
         SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2 FROM resources WHERE id=$1`, [resource.id,user.id]);

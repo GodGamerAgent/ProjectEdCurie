@@ -232,6 +232,13 @@
       "when": 1794479936735,
       "tag": "0032_demo_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794484242066,
+      "tag": "0033_pdf_ai_configuration",
+      "breakpoints": true
     }
   ]
 }

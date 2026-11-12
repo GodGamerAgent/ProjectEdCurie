@@ -5,7 +5,7 @@ import { clerkClient } from "@clerk/express";
 import type { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { HttpError, authConfigured, type AppUser } from "./auth";
-import { qwen } from "./demo-ai";
+import { aiStatus, saveAISettings } from "./demo-ai";
 import { currentUser, requireRole } from "./access";
 import { courseRoutes } from "./routes-courses";
 import { materialRoutes } from "./routes-materials";
@@ -35,7 +35,11 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   });
   app.get("/api/admin/ai/status",async(_req,res)=>{
     requireRole(currentUser(res),"admin");
-    res.json({configured:Boolean(process.env.GROQ_API_KEY),model:qwen});
+    res.json(await aiStatus(db));
+  });
+  app.put("/api/admin/ai/status",async(req,res)=>{
+    requireRole(currentUser(res),"admin");
+    res.json(await saveAISettings(db,req.body));
   });
   app.use(instituteRoutes(db, inviteSender));
   app.use(courseRoutes(db));

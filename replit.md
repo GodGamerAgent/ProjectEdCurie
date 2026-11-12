@@ -21,6 +21,8 @@ The institute migration is additive and does not delete legacy records. Previous
 
 On the Replit development workspace, pull GitHub main, run `npm ci` and `npm run db:migrate`, then stop and restart the `npm run dev` workflow. Migration `0032_demo_workflow.sql` adds the demo workflow and places existing active resources in topics named after them. It preserves the existing accounts, enrollments, and resource files. The new course baseline has its own academic and learning preference questions, so publish it before demonstrating onboarding.
 
-Set `GROQ_API_KEY` in Replit Secrets. AI generation uses `qwen/qwen3.8-27b` and voice messages use `whisper-large-v3-turbo`. Uploads are processed in sections. If Groq returns a rate limit, wait and select **Process with AI** to continue from the last saved section.
+Apply migration `0033_pdf_ai_configuration.sql` for topic deletion and AI settings. Set `GROQ_API_KEY` in Replit Secrets. The default generation model is `qwen/qwen3.8-27b`. Voice uses Groq Whisper independently of the chat model.
+
+In the admin workspace, **AI provider settings** accepts a model ID, API base URL, and PDF input mode. To use a custom endpoint, set `AI_PROVIDER_BASE_URL` and `AI_PROVIDER_API_KEY` in Replit Secrets and enter the matching HTTPS URL in the admin form. Choose **Original PDF file** for a model that accepts PDF attachments on the Chat Completions endpoint. Choose **Page images** for Groq Qwen. It reads each original PDF page visually and saves progress after each page. If the provider rate-limits the request, wait and select **Process with AI** to resume.
 
 See [the demo checklist](ACCEPTANCE-CHECKLIST.md) for the live walkthrough. The isolated suite uses temporary PostgreSQL and mocked Groq and Whisper replies. It does not seed the Replit database.

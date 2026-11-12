@@ -1,6 +1,8 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, jsonBody } from "./api";
 
+type AISettings = { configured:boolean; model:string; baseUrl:string; pdfMode:"vision"|"file" };
+
 type Institute = { id: string; displayName: string; hasLogo: boolean };
 
 export default function AdminWorkspace() {
@@ -17,7 +19,7 @@ export default function AdminWorkspace() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [aiStatus,setAiStatus]=useState<{configured:boolean;model:string}|null>(null);
+  const [aiStatus,setAiStatus]=useState<AISettings|null>(null);
   const active = institutes.find((item) => item.id === selected);
 
   const refresh = useCallback(async () => {
@@ -33,7 +35,7 @@ export default function AdminWorkspace() {
     setDomains(domainData.domains); setInvitations(invitationData.invitations);
   }, []);
   useEffect(() => { void refresh().catch((e) => setError(e.message)); }, [refresh]);
-  useEffect(()=>{void api<{configured:boolean;model:string}>("/api/admin/ai/status").then(setAiStatus).catch(()=>setAiStatus(null));},[]);
+  useEffect(()=>{void api<AISettings>("/api/admin/ai/status").then(setAiStatus).catch(e=>setError(e.message));},[]);
   useEffect(() => {
     let current = true;
     setName(active?.displayName ?? "");
@@ -102,7 +104,22 @@ export default function AdminWorkspace() {
     <section className="panel main-panel">
       <div className="eyebrow">Platform administration</div><h2>Set up institutes.</h2>
       <p className="muted">Create each institute, approve its email domains, and invite its teachers. The workspace starts empty.</p>
-      {aiStatus&&!aiStatus.configured&&<div className="notice" role="status"><strong>AI lessons are not configured.</strong><p>Add <code>GROQ_API_KEY</code> in Replit Tools → Secrets. The selected model is {aiStatus.model}. The key value is never shown here.</p></div>}
+      {aiStatus && <details className="course-card">
+        <summary>AI provider settings</summary>
+        <form className="form-grid" style={{marginTop:12}} onSubmit={event=>{
+          event.preventDefault();
+          void run(async()=>setAiStatus(await api<AISettings>("/api/admin/ai/status",{method:"PUT",body:jsonBody(aiStatus)})),"AI provider settings saved.");
+        }}>
+          <label className="field full">OpenAI-compatible base URL<input type="url" required value={aiStatus.baseUrl} onChange={e=>setAiStatus({...aiStatus,baseUrl:e.target.value})}/></label>
+          <label className="field">Model ID<input required value={aiStatus.model} onChange={e=>setAiStatus({...aiStatus,model:e.target.value})}/></label>
+          <label className="field">PDF input<select value={aiStatus.pdfMode} onChange={e=>setAiStatus({...aiStatus,pdfMode:e.target.value as AISettings["pdfMode"]})}>
+            <option value="vision">Page images</option><option value="file">Original PDF file</option>
+          </select></label>
+          <p className="muted field full">Use Page images with Groq. Choose Original PDF file only if your provider accepts PDF attachments in Chat Completions. For a custom endpoint, set AI_PROVIDER_BASE_URL and AI_PROVIDER_API_KEY in Replit Secrets.</p>
+          {!aiStatus.configured && <p className="notice field full">The selected provider needs an API key in Replit Secrets.</p>}
+          <div><button className="button small primary" disabled={busy}>Save AI settings</button></div>
+        </form>
+      </details>}
       {error && <div className="notice error" role="alert">{error}</div>}
       {message && <div className="notice success" role="status">{message}</div>}
       <form className="form-grid" onSubmit={createInstitute}>

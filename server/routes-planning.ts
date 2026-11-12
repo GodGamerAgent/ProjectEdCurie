@@ -75,7 +75,7 @@ export function planningRoutes(db:Pool) {
     if (startsOn>endsOn) throw new HttpError(400,"Choose an end date on or after the start date.");
     const existing=(await db.query(`SELECT title,weekday,start_time AS "startTime",end_time AS "endTime",starts_on,ends_on,timezone
       FROM class_timetable_events WHERE course_id=$1 AND status='active' ORDER BY weekday,start_time LIMIT 30`,[course.id])).rows;
-    const result=object(await demoAI(
+    const result=object(await demoAI(db,
       "Suggest up to seven weekly class entries using the teacher's scheduling instructions. Avoid conflicts with existing classes. Return {events:[{title,weekday,startTime,endTime}]}, with weekday 1 (Monday) through 7 (Sunday), 24-hour HH:MM times, and end after start. Return [] if the constraints cannot be met.",
       {course:course.title,instructions,existing,startsOn,endsOn,timezone}
     ));
