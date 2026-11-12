@@ -4,7 +4,7 @@ import multer from "multer";
 import type { Pool } from "pg";
 import { cleanString, courseAccess, currentUser, NO_BASELINE, NO_RESOURCE, requireRole, teacherCourse, uuid } from "./access";
 import { HttpError } from "./auth";
-import { aiText, demoAI, object, transcribe } from "./demo-ai";
+import { aiText, demoAI, generateOnboardingQuestions, object, transcribe } from "./demo-ai";
 
 type Question = { id: string; kind: "academic" | "preferences"; prompt: string; answer: string };
 const attachments = multer({storage:multer.memoryStorage(),limits:{fileSize:4*1024*1024,files:2,fields:7}});
@@ -44,15 +44,12 @@ export function demoLearningRoutes(db: Pool) {
       if (problemIndex!==undefined && (!Number.isInteger(problemIndex) || !part.problems[problemIndex])) throw new HttpError(400,"Choose a problem from the bank.");
       basis={resource:resource.title, summary:part.summary.slice(0,4500), problem:part.problems[problemIndex]};
     }
-    const output=object(await demoAI(db,kind==="academic"
+    const academic=kind==="academic";
+    const questions=await generateOnboardingQuestions(db,academic
       ? "Create exactly the requested number of distinct academic onboarding questions grounded in the summary and optional original problem. Follow the teacher's instructions within that scope. Use self-contained multiple-choice questions with options A–D in prompt and a single correct letter as answer. Return {questions:[{prompt,answer}]}."
       : "Generate exactly the requested number of optional-to-describe, open-ended learning preference questions. Ask about explanations, confidence, and study habits. Avoid mental health diagnosis, sensitive personal information, ability labels, or scoring. Follow teacher instructions within that scope. Return {questions:[{prompt}]}.",
-    {count,instructions,basis}));
-    if (!Array.isArray(output.questions) || output.questions.length!==count) throw new HttpError(502,"Groq returned the wrong number of questions. Try again.");
-    res.json({questions:output.questions.map(value=>{
-      const item=object(value);
-      return {id:randomUUID(),kind,prompt:aiText(item.prompt,5000),answer:kind==="academic"?aiText(item.answer,1500):""};
-    })});
+    {count,instructions,basis},academic);
+    res.json({questions:questions.map(question=>({id:randomUUID(),kind,...question}))});
   });
 
   router.put(base+"/baseline",async(req,res)=>{

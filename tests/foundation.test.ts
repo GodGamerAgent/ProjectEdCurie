@@ -281,6 +281,31 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
     expect((await studentView()).body.message).toBe("Your institute is preparing the baseline assessment");
     expect((await request(app).get(path).set(student)).status).toBe(403);
     const generate=(data:object)=>request(app).post(base+"/questions/generate").set(teacher).send(data);
+    vi.stubEnv("AI_PROVIDER_BASE_URL",googleBase);
+    expect((await request(app).put(settingsUrl).set(admin).send(googleSettings)).status).toBe(200);
+    provider.mockRejectedValueOnce(new DOMException("Provider deadline exceeded","TimeoutError"));
+    provider.mockImplementationOnce(async (url,init)=>{
+      expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
+      const body=JSON.parse(String(init.body));
+      expect(JSON.parse(body.contents[0].parts[0].text).instructions).toBe("Ask about study habits");
+      expect(body.generationConfig.responseJsonSchema.properties.questions.items.required).toEqual(["prompt"]);
+      return Response.json({candidates:[{content:{parts:[{text:'{"questions":[{"prompt":"How do you review your notes?"}]}'}]}}]});
+    });
+    const googlePreferences=await generate({kind:"preferences",count:1,instructions:"Ask about study habits"});
+    expect(googlePreferences.status).toBe(200);
+    expect(googlePreferences.body.questions).toMatchObject([{kind:"preferences",prompt:"How do you review your notes?",answer:""}]);
+    provider.mockResolvedValueOnce(Response.json({candidates:[{content:{parts:[{text:'{"questions":['}]}}]}));
+    provider.mockImplementationOnce(async (url,init)=>{
+      expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
+      const body=JSON.parse(String(init.body));
+      expect(JSON.parse(body.contents[0].parts[0].text).basis.problem.prompt).toBe(prompt);
+      expect(body.generationConfig.responseJsonSchema.properties.questions.items.required).toEqual(["prompt","answer"]);
+      return Response.json({candidates:[{content:{parts:[{text:'{"questions":[{"prompt":"Which number comes next?","answer":"A"}]}'}]}}]});
+    });
+    const googleAcademic=await generate({kind:"academic",count:1,instructions:"Use a simple sequence",resourceId,partIndex:0,problemIndex:0});
+    expect(googleAcademic.status).toBe(200);
+    expect(googleAcademic.body.questions).toMatchObject([{kind:"academic",answer:"A"}]);
+    expect((await request(app).put(settingsUrl).set(admin).send({baseUrl:"https://api.groq.com/openai/v1",model:"qwen/qwen3.8-27b",pdfMode:"vision"})).status).toBe(200);
     const academic=await generate({kind:"academic",count:1,instructions:"Use a simple sequence",resourceId,partIndex:0,problemIndex:0});
     const preferences=await generate({kind:"preferences",count:1});
     expect(academic.status).toBe(200);

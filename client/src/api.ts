@@ -12,7 +12,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!(init.body instanceof FormData) && init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(path, { ...init, headers, credentials: "include" });
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers, credentials: "include" });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new ApiError("The connection to EdCurie was interrupted. Try again.", 0);
+    }
+    throw error;
+  }
   if (!response.ok) {
     let message = `Request failed (${response.status}).`;
     try {
