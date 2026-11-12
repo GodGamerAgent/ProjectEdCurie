@@ -90,6 +90,14 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).post(`/api/courses/${courseId}/enrollments`).set(as("teacher")).send({ email: actors.student.email })).status).toBe(201);
     expect((await request(app).get(`/api/courses/${courseId}/onboarding`).set(as("outsider"))).status).toBe(403);
     expect((await request(app).get(`/api/courses/${courseId}`).set(as("otherTeacher"))).status).toBe(403);
+    expect((await request(app).get(`/api/courses/${courseId}/intake`).set(as("student"))).body).toMatchObject({background:"",confidence:null,goals:""});
+    expect((await request(app).get(`/api/courses/${courseId}/intake`).set(as("teacher"))).status).toBe(403);
+    expect((await request(app).put(`/api/courses/${courseId}/intake`).set(as("student")).send({background:"I know basic algebra.",confidence:4,targetAssessment:"NST term test",targetDate:"2026-12-20",goals:"Explain forces from class notes."})).body)
+      .toMatchObject({background:"I know basic algebra.",confidence:4,targetAssessment:"NST term test",targetDate:"2026-12-20",goals:"Explain forces from class notes."});
+    expect((await request(app).put(`/api/courses/${courseId}/intake`).set(as("student")).send({confidence:6})).status).toBe(400);
+    expect((await request(app).get(`/api/courses/${courseId}/intake`).set(as("student"))).body.targetAssessment).toBe("NST term test");
+    expect((await request(app).delete(`/api/courses/${courseId}/intake`).set(as("student"))).body).toEqual({deleted:true});
+    expect((await request(app).get(`/api/courses/${courseId}/intake`).set(as("student"))).body.confidence).toBeNull();
   });
   it("requires explicit institute assignment for a legacy teacher", async () => {
     await db.query("INSERT INTO users (provider_id,email,role) VALUES ('legacy-teacher','legacy@example.edu','teacher')");
@@ -284,11 +292,16 @@ describe("foundation access and onboarding", () => {
     vi.stubEnv("GROQ_API_KEY","");
     const missingKey=await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student"));
     expect(missingKey.status,JSON.stringify(missingKey.body)).toBe(503);
+    await request(app).put(`/api/courses/${id}/intake`).set(as("student")).send({background:"I have studied motion.",confidence:3,targetAssessment:"Physics unit test",goals:"Understand the source explanation."});
     vi.stubEnv("GROQ_API_KEY","isolated-test-key");
     try {
-      vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({explanation:"Explanation",citations:[{resourceId:resource.body.id,location:"Page 1"}],checks:[{prompt:"What does the material say?",options:["One","Two","Three","Four"],correctOption:2,citations:[{resourceId:resource.body.id,location:"Page 1"}]}]})}}]}),{status:200,headers:{"Content-Type":"application/json"}})));
+      const provider=vi.fn(async(_url:string,options:RequestInit)=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({explanation:"Explanation",citations:[{resourceId:resource.body.id,location:"Page 1"}],checks:[{prompt:"What does the material say?",options:["One","Two","Three","Four"],correctOption:2,citations:[{resourceId:resource.body.id,location:"Page 1"}]}]})}}]}),{status:200,headers:{"Content-Type":"application/json"}}));
+      vi.stubGlobal("fetch",provider);
       const lesson=await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student"));
       expect(lesson.status).toBe(200); expect(lesson.body.citations[0].location).toBe("Page 1");
+      const requestBody=JSON.parse(String(provider.mock.calls[0]?.[1]?.body));
+      const providerPrompt=JSON.parse(requestBody.messages.find((message:any)=>message.role==="user").content);
+      expect(providerPrompt.learnerContext).toMatchObject({background:"I have studied motion.",confidence:3,targetAssessment:"Physics unit test",goals:"Understand the source explanation."});
       expect(lesson.body.checks).toHaveLength(1);expect(lesson.body.checks[0].options).toEqual(["One","Two","Three","Four"]);
       expect(lesson.body.checks[0]).not.toHaveProperty("correctOption");
       expect((await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("teacher"))).status).toBe(403);
@@ -523,6 +536,12 @@ describe("foundation access and onboarding", () => {
     expect(analytics.body.assignments).toMatchObject({assignments:1,submissions:1,reviewed:1});
     expect(analytics.body.concepts[0].verifiedAssignments).toBe(1);
     expect((await db.query("SELECT count(*) FROM assignment_evidence WHERE submission_id=$1",[submission.body.id])).rows[0].count).toBe("1");
+    expect(analytics.body.studentOptions).toContainEqual({id:actors.student.id,email:actors.student.email});
+    const timeline=await request(app).get(`/api/courses/${course.id}/analytics/students/${actors.student.id}?days=7&kind=assignment`).set(as("teacher"));
+    expect(timeline.status).toBe(200);expect(timeline.body.timeline).toMatchObject([{type:"assignment",concept:"Assignment concept",correct:false,errorCategory:"units_or_notation"}]);
+    expect((await request(app).get(`/api/courses/${course.id}/analytics/students/${actors.outsider.id}`).set(as("teacher"))).status).toBe(404);
+    expect((await request(app).get(`/api/courses/${course.id}/analytics/students/${actors.student.id}`).set(as("otherTeacher"))).status).toBe(403);
+    expect((await request(app).get(`/api/courses/${course.id}/analytics/students/${actors.student.id}?kind=unknown`).set(as("teacher"))).status).toBe(400);
     expect(analytics.body.activity).toHaveLength(7);
     expect((await request(app).get(`/api/courses/${course.id}/analytics`).set(as("otherTeacher"))).status).toBe(403);
     expect((await request(app).get(`/api/courses/${course.id}/analytics?days=3`).set(as("teacher"))).status).toBe(400);

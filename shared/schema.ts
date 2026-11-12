@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, uuid, text, timestamp, uniqueIndex, jsonb, customType, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, uniqueIndex, jsonb, customType, integer, boolean, date } from "drizzle-orm/pg-core";
 
 const bytes = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
@@ -120,6 +120,17 @@ export const preferences = pgTable("student_preferences", {
   hints: text("hints").notNull().default(""),
   formats: jsonb("formats").$type<string[]>().notNull().default([])
 });
+export const studentIntakes = pgTable("student_intakes",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  background: text("background"),
+  confidence: integer("confidence"),
+  targetAssessment: text("target_assessment"),
+  targetDate: date("target_date"),
+  goals: text("goals"),
+  updatedAt: timestamp("updated_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("student_intakes_user_course_unique").on(table.userId,table.courseId)]);
 export const baselineSubmissions = pgTable("baseline_submissions", {
   id: uuid("id").defaultRandom().primaryKey(),
   assessmentId: uuid("assessment_id").notNull().references(() => assessments.id),

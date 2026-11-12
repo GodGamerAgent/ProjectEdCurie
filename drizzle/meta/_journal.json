@@ -162,6 +162,13 @@
       "when": 1794468891919,
       "tag": "0022_superb_sage",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794469520574,
+      "tag": "0023_conscious_silver_samurai",
+      "breakpoints": true
     }
   ]
 }

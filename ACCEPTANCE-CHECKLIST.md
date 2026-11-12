@@ -2,9 +2,9 @@
 
 Updated: 2026-11-12
 
-**Current checkpoint:** assignments support rubric review, structured error categories, and optional teacher-verified concept evidence that guides future practice without inflating independent mastery. The loop also includes source/question versions, diagnosis, linked twins, FSRS review, mocks, analytics, voice, timers, and opt-in XP ranking. Isolation tests pass; live Groq, browser speech, and NST workflows remain unverified. No fixtures were added to development or production.
+**Current checkpoint:** assignments support structured diagnosis and optional teacher-verified evidence outside independent mastery. Teachers now have filtered learner evidence timelines. Students can save private intake context that is supplied to cited AI explanations, alongside the existing learning loop, timers, voice, and opt-in XP ranking. Isolation tests pass; live Groq, browser speech, and NST workflows remain unverified. No fixtures were added to development or production.
 
-**Next unfinished implementation task: teacher analytics depth.** Add learner-level evidence timelines and useful filters while preserving teacher-course authorization.
+**Next unfinished implementation task: outcomes and milestones.** Add learner study-duration preferences, outcome-aware format suggestions, and multiple dated course milestones.
 
 **Linked-twin manual walkthrough:** in the assigned teacher's course, create two distinct practice questions for the same concept, then use **Link an independent twin** to pair them. As an enrolled student with a completed baseline, submit the original, choose **Solve linked twin**, and answer without hints. Verify the independent count increases once. With another authorized student or fresh teacher-authored pair, request a hint on the twin and verify only assisted evidence increases. Refresh to verify **Resume linked twin** retains used hints. Use real accounts/material only; fixtures belong exclusively in `npm run test:isolated`.
 
@@ -15,9 +15,9 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | # | Feature | Screen / behavior present | Server / persistence | Verification and remaining work |
 |---|---|---|---|---|
 | 1 | Granular concept mastery | Student concept list shows independent/assisted counts and evidence-based status; teacher sees course progress | Unique teacher-authored question outcomes, including hint-free FSRS review, feed mastery; baseline, comprehension, and assisted attempts cannot independently demonstrate mastery | **Implemented for distinct-question practice/review / partial for retention.** Needs another look after two latest independent errors; demonstration requires 3 distinct questions and >=80% of the latest five, including a correct most-recent attempt. |
-| 2 | Learning preferences and study habits | Student Preferences view; lesson format chooser | Preferences persist; selected preferences are passed to Groq | **Partial.** Test preference isolation/reset and comparable outcomes before adapting formats; active duration is not implemented. |
-| 3 | Goals and milestones | Student saves a course goal and deadline; availability/preferences are stored separately | Per-student/course goal persists and anchors the first plan deadline | **Partial.** One goal only; no milestones, target scores, or multiple scopes. |
-| 4 | Intelligent intake | Baseline assessment is available after course gate | Assessment question snapshot, answer autosave, deterministic objective score | **Partial.** Does not collect background/confidence/target-assessment data or adapt intake. |
+| 2 | Learning preferences and study habits | Student Preferences view; explanation-format chooser; course-specific intake | Preferences persist and are passed to Groq; self-reported background, confidence, assessment target/date, and goals can personalize explanations | **Partial.** No active study-duration tracking or outcome-based format recommendation. |
+| 3 | Goals and milestones | Student saves a course goal and deadline; intake captures an optional learning goal/date | Per-student/course goal anchors the plan; intake remains private and can be deleted | **Partial.** One formal plan goal only; no multiple milestones or target-score tracking. |
+| 4 | Intelligent intake | Student can save/delete prior background, confidence, target assessment/date, and goals before the baseline | Course-scoped student data is authorization-checked and passed as untrusted personalization context to the cited lesson provider | **Partial / isolated-tested.** No intake-driven baseline branching or target-assessment diagnostics. |
 | 5 | Feasibility and difficulty score | Student sees teacher-estimated workload, private availability, class/commitment conflicts, deadline, and a 1–10 feasibility score | Course concepts have teacher-managed phase estimates and difficulty; capacity is calculated from actual schedule windows | **Implemented as a transparent first score / partial.** Needs evidence-driven workload ranges and broader accommodations. |
 | 6 | Learning, practice, and revision phases | Plan assigns learning, practice, and revision blocks by concept | Blocks persist with estimates, schedule, status, and explanation; a review vault schedules recall with FSRS | **Implemented as initial phased plans.** Revision allocation can be made more evidence-adaptive. |
 | 7 | Curriculum adaptation | Topics with errors are prioritized in focused practice and study plans; new evidence can trigger automatic replanning | Distinct outcomes and prerequisite edges inform ordering | **Partial.** No completion-driven prerequisite mastery or advanced pacing model yet. |
@@ -48,20 +48,19 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | Resource extraction and durable storage | **Partial** | PDF/text upload and manual text recovery exist; extraction jobs, retries, archival, and content version history remain. |
 | Teacher timetable and class events | **Partial** | Teacher can add/cancel recurring weekly course events with IANA timezone/date range and date exceptions. Same-time same-course conflicts are checked; no one-off events, room/session metadata, or multiple sections yet. |
 | Student availability and commitments | **Partial** | Per-course weekly windows and private one-off absolute-time commitments persist. Availability intervals reject overlap; personal commitments remain private and the planner excludes them from session windows. |
-| Teacher analytics and error categories | **Partial** | Teacher view includes 7/30/90-day activity, distinct concept evidence, reviewed assignments, structured error categories, and schedule completion. No learner-level timelines or custom filters yet. |
+| Teacher analytics and error categories | **Partial** | Teacher view includes 7/30/90-day activity, concept evidence, structured error categories, assignment outcomes, schedule completion, and per-learner timelines filtered by activity/date window. No custom date range or cohort comparisons. |
 | XP and leaderboard | **Partial** | Idempotent XP awards cover practice, comprehension, reviews, and completed study blocks. Students choose a display name and opt in per course; leaderboard responses never include emails. More award types and anti-gaming limits remain. |
 | Groq setup and reliability | **Partial** | The key has been supplied. Server-only access, bounded excerpt/citation validation, timeout, one transient retry, per-user rate cap and metadata exist. Optional `GROQ_MODEL` defaults to `qwen/qwen3.8-27b`. Live provider behavior is **not verified**; this twin workflow requires no AI calls. |
 | Consistency and authorization | **Partial** | Baseline sessions, practice, twin follow-ups, and comprehension answers persist and guard duplicate submissions; teacher/student scope and publication are checked on server. |
-| Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 16 tests). Tests cover learning evidence, schedule/replanning, FSRS, adaptive mocks, text/PDF assignment submission, structured diagnosis, verified assignment evidence outside mastery, analytics authorization, idempotent XP, and opt-in leaderboard privacy. Provider responses are simulated; no live Groq call was made. |
-| Preview / direct development URL | **Passed** | Assignment and XP migrations applied and workflow restarted; direct URL returned HTTP 200. Signed-in features require real NST accounts. |
+| Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 16 tests). Tests cover learning evidence, schedules, FSRS, mocks, assignment files/diagnosis/evidence separation, authorized learner timelines, intake privacy and prompt context, idempotent XP, and leaderboard privacy. Groq responses are simulated; no live call was made. |
+| Preview / direct development URL | **Pending intake migration** | Apply the additive student-intake migration, restart, and recheck the direct URL. Signed-in features require real NST accounts. |
 | Signed-in browser flow | **Pending owner verification** | With real NST teacher/student accounts, verify resource/baseline, lesson/practice/twin/review/mock, assignments and feedback, class schedule, and private availability. Do not use a test-login bypass. |
 
 ## Remaining implementation order
 
-1. Expand teacher analytics with learner timelines and useful date/activity filters.
-2. Add learner intake for background, confidence, and target assessments; improve goal milestones and preference feedback.
-3. Extend curriculum adaptation, multi-turn tutoring, and teacher controls for diagnosis and mocks.
-4. Add mock difficulty/timing adaptation and multi-question targeted practice.
-5. Add more XP award types and anti-gaming limits; background schedule and break reminders.
-6. Extend resource extraction for scanned files, and timetable support for one-off events/sections.
-7. Continue isolated workflow tests and real-account/manual responsive verification; keep development and production free of fixtures.
+1. Add learner study-duration preferences, outcome-aware format suggestions, and multiple dated course milestones.
+2. Extend curriculum adaptation, multi-turn tutoring, and teacher controls for diagnosis and mocks.
+3. Add mock difficulty/timing adaptation and multi-question targeted practice.
+4. Add more XP award types and anti-gaming limits; background schedule and break reminders.
+5. Extend resource extraction for scanned files, and timetable support for one-off events/sections.
+6. Continue isolated workflow tests and real-account/manual responsive verification; keep development and production free of fixtures.

@@ -8,6 +8,7 @@ import SignupFieldHints from "./SignupFieldHints";
 import { StudentStudy, TeacherStudy } from "./StudyLoop";
 import { StudentAssignments } from "./AssignmentPanels";
 import RewardsPanel from "./RewardsPanel";
+import StudentIntake from "./StudentIntake";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -472,6 +473,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
         <button className="button primary" type="submit" disabled={submitting || submitted}>{submitting ? "Submitting…" : submitted ? "Submitted" : "Submit assessment"}</button>
       </form> : <div className="empty" style={{ marginTop: 14 }}><h3>No questions were returned</h3><p>Refresh readiness and try again, or contact your course teacher.</p></div>}
     </section>}
+    {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentIntake courseId={courseId}/>}
     {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentStudy key={String(courseId)} courseId={courseId} baselineReady={Boolean(ready&&baselineResult)} />}
     {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentAssignments courseId={courseId}/>}
     {onboarding?.state.toLowerCase() !== "unenrolled" && <RewardsPanel courseId={courseId}/>}
