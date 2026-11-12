@@ -3,6 +3,7 @@ import { publishableKeyFromHost } from "@clerk/react/internal";
 import { FormEvent, MouseEvent, ReactNode, useCallback, useEffect, useState } from "react";
 import { Redirect as WouterRedirect, Route, Router as WouterRouter, Switch, useLocation } from "wouter";
 import { api, jsonBody } from "./api";
+import AdminWorkspace from "./AdminWorkspace";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -14,7 +15,8 @@ function stripBase(path: string): string {
 }
 
 type Config = { authEnabled: boolean };
-type Person = { id: string; email: string; role: "admin" | "teacher" | "student" | string };
+type InstituteBrand = { id: string; displayName: string; hasLogo: boolean };
+type Person = { id: string; email: string; role: "admin" | "teacher" | "student" | string; institute: InstituteBrand | null };
 type Course = { id: string | number; title: string; description: string; role?: string };
 type Resource = { id: string | number; title: string; status: string; extractionStatus?: string; text?: string; hasFile: boolean };
 type Question = { id: string | number; prompt: string; answer?: string; resourceId?: string | number };
@@ -41,9 +43,9 @@ function Brand() {
   return <a className="brand" href={routeUrl("/")} aria-label="EdCurie home"><span className="brand-mark" aria-hidden="true">ec</span><span>EdCurie</span></a>;
 }
 
-function Header({ authenticated = false }: { authenticated?: boolean }) {
+function Header({ authenticated = false, institute = null }: { authenticated?: boolean; institute?: InstituteBrand | null }) {
   return <header className="topbar">
-    <Brand />
+    <div className="brand-group"><Brand />{institute && <div className="institute-brand">{institute.hasLogo && <img src="/api/institute/logo" alt="" />}<span>{institute.displayName}</span></div>}</div>
     <nav className="nav-actions" aria-label="Main navigation">
       {authenticated ? <><a className="nav-link" href={routeUrl("/app")}>Workspace</a><LogoutButton /></> :
         <><a className="nav-link" href="#how-it-works">How it works</a><a className="nav-link" href={routeUrl("/sign-in")}>Sign in</a><a className="button primary small" href={routeUrl("/sign-up")}>Get started</a></>}
@@ -62,14 +64,14 @@ function Landing() {
     <main className="page-wrap">
       <section className="hero">
         <div className="hero-copy">
-          <div className="eyebrow">Newton School of Technology · Learning, with a reason</div>
+          <div className="eyebrow">EdCurie · Learning, with a reason</div>
           <h1>Understand the<br /><span>why</span> behind it.</h1>
           <p>EdCurie connects classroom material to the moments that make learning stick. Teachers publish the source. Students build understanding from it.</p>
           <div className="hero-actions">
             <a className="button primary" href={routeUrl("/sign-up")}>Continue to EdCurie <span aria-hidden="true">↗</span></a>
             <a className="button" href={routeUrl("/sign-in")}>I already have an account</a>
           </div>
-          <div className="hero-note">A learning space for the NST community</div>
+          <div className="hero-note">A learning space built around your courses</div>
         </div>
         <Panel className="orbit-panel">
           <div className="eyebrow">One connected learning loop</div>
@@ -102,28 +104,32 @@ function Landing() {
           <div className="step"><span className="step-num">STEP 03</span><h3>Students begin</h3><p>Enrolled students start onboarding once the course has real, published material.</p></div>
         </div>
       </section>
-      <Panel className="final-cta"><div><div className="eyebrow">For the NST community</div><h2>Bring your course into focus.</h2><p className="muted" style={{ margin: 0 }}>Sign in with your institute account to continue.</p></div><a className="button primary" href={routeUrl("/sign-in")}>Sign in to EdCurie</a></Panel>
-      <footer className="footer"><Brand /><span>Newton School of Technology</span></footer>
+      <Panel className="final-cta"><div><div className="eyebrow">Learn with EdCurie</div><h2>Bring your course into focus.</h2><p className="muted" style={{ margin: 0 }}>Sign in to continue.</p></div><a className="button primary" href={routeUrl("/sign-in")}>Sign in to EdCurie</a></Panel>
+      <footer className="footer"><Brand /><span>Learning, with a reason</span></footer>
     </main>
   </div>;
 }
 
 function AuthPage({ kind }: { kind: "sign-in" | "sign-up" }) {
-  return <div className="app-shell"><Header /><main className="auth-wrap">
+  return <><Show when="signed-in"><WouterRedirect to="/app" /></Show><Show when="signed-out"><div className="app-shell"><Header /><main className="auth-wrap">
     <Panel className="auth-card">
-      <div className="eyebrow">NST learning platform</div>
+      <div className="eyebrow">EdCurie learning platform</div>
       <h1>{kind === "sign-in" ? "Welcome back." : "Join your institute."}</h1>
-      <p className="muted">{kind === "sign-in" ? "Continue with your verified institutional account." : "Create an account with your institute email address."}</p>
+      <p className="muted">{kind === "sign-in" ? "Continue with your verified email account." : "Use a verified email. Institute members need an approved institute email."}</p>
+      {kind === "sign-up" && <div className="signup-guidance" aria-label="Sign-up tips">
+        <p><strong>Email:</strong> Enter a complete address, like name@example.com, that you can verify.</p>
+        <p><strong>Password:</strong> Use 15 or more characters. Select the password field to see its current requirements.</p>
+      </div>}
       {kind === "sign-in"
-        ? <SignIn routing="path" path={routeUrl("/sign-in")} signUpUrl={routeUrl("/sign-up")} />
-        : <SignUp routing="path" path={routeUrl("/sign-up")} signInUrl={routeUrl("/sign-in")} />}
+        ? <SignIn routing="path" path={routeUrl("/sign-in")} signUpUrl={routeUrl("/sign-up")} forceRedirectUrl={routeUrl("/app")} />
+        : <SignUp routing="path" path={routeUrl("/sign-up")} signInUrl={routeUrl("/sign-in")} forceRedirectUrl={routeUrl("/app")} />}
     </Panel>
-  </main></div>;
+  </main></div></Show></>;
 }
 
 function AuthDisabled({ error = "" }: { error?: string }) {
   return <div className="app-shell"><Header /><main className="auth-wrap"><Panel className="auth-card">
-    <div className="eyebrow">NST learning platform</div><h1>Sign-in unavailable.</h1>
+    <div className="eyebrow">EdCurie learning platform</div><h1>Sign-in unavailable.</h1>
     <p className="muted">{error || "Authentication is currently disabled for this app."}</p>
   </Panel></main></div>;
 }
@@ -151,69 +157,12 @@ function Workspace() {
   }, [isLoaded, isSignedIn]);
   useEffect(() => { void loadMe(); }, [loadMe]);
   if (!isLoaded || loading) return <LoadingPage />;
-  if (!isSignedIn) return <div className="app-shell"><Header /><main className="page-wrap narrow"><Panel className="main-panel"><div className="eyebrow">Sign in required</div><h2>Your workspace is private.</h2><p className="muted">Sign in with your verified institute account to continue.</p><a className="button primary" href="/sign-in">Sign in</a></Panel></main></div>;
+  if (!isSignedIn) return <div className="app-shell"><Header /><main className="page-wrap narrow"><Panel className="main-panel"><div className="eyebrow">Sign in required</div><h2>Your workspace is private.</h2><p className="muted">Sign in with your verified email account to continue.</p><a className="button primary" href="/sign-in">Sign in</a></Panel></main></div>;
   if (!person) return <div className="app-shell"><Header authenticated /><main className="page-wrap narrow"><Panel className="main-panel"><h2>We could not load your account.</h2><ErrorNotice error={authError || "Your account could not be verified."} retry={() => void loadMe()} /></Panel></main></div>;
-  return <div className="app-shell"><Header authenticated /><main className="page-wrap">
+  return <div className="app-shell"><Header authenticated institute={person.institute} /><main className="page-wrap">
     <div className="workspace-head"><div><div className="eyebrow">EdCurie workspace · {person.role}</div><h1>Hello.</h1><p>{person.email}</p></div></div>
     {person.role === "admin" ? <AdminWorkspace /> : person.role === "teacher" ? <TeacherWorkspace /> : person.role === "student" ? <StudentWorkspace /> : <Panel className="main-panel"><h2>Access is not assigned yet.</h2><p className="muted">Your account is verified, but it does not have an EdCurie workspace role.</p></Panel>}
   </main></div>;
-}
-
-function AdminWorkspace() {
-  const [domains, setDomains] = useState<string[] | null>(null);
-  const [invitations, setInvitations] = useState<{ email: string }[] | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [domain, setDomain] = useState("");
-  const [email, setEmail] = useState("");
-  const [message, setMessage] = useState("");
-  const refresh = useCallback(async () => {
-    setError("");
-    try {
-      const [domainData, inviteData] = await Promise.all([
-        api<{ domains: string[] }>("/api/admin/domains"),
-        api<{ invitations: { email: string }[] }>("/api/admin/invitations"),
-      ]);
-      setDomains(domainData.domains); setInvitations(inviteData.invitations);
-    } catch (e) { setError(e instanceof Error ? e.message : "Unable to load setup data."); }
-  }, []);
-  useEffect(() => { void refresh(); }, [refresh]);
-  const addDomain = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setMessage(""); setError("");
-    try { await api("/api/admin/domains", { method: "POST", body: jsonBody({ domain: domain.trim() }) }); setDomain(""); setMessage("Approved domain added."); await refresh(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not add domain."); } finally { setBusy(false); }
-  };
-  const addInvitation = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setMessage(""); setError("");
-    try { await api("/api/admin/invitations", { method: "POST", body: jsonBody({ email: email.trim() }) }); setEmail(""); setMessage("Teacher invitation recorded."); await refresh(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not add invitation."); } finally { setBusy(false); }
-  };
-  return <div className="workspace-grid">
-    <nav className="side-nav panel" aria-label="Admin workspace"><button aria-current="page">Institute setup</button><button onClick={() => document.getElementById("teacher-invites")?.scrollIntoView({ behavior: "smooth" })}>Teacher invitations</button></nav>
-    <Panel className="main-panel">
-      <div className="eyebrow">Administrator setup</div><h2>Prepare your institute.</h2><p className="muted">Approve institutional email domains and invite teachers. This workspace starts empty.</p>
-      {error && <ErrorNotice error={error} retry={() => void refresh()} />}{message && <div className="notice success" role="status">{message}</div>}
-      <div className="divider" />
-      <div className="row"><div><h3>Approved domains</h3><p className="muted">Use the domain portion of institutional email addresses.</p></div></div>
-      <form className="form-grid" onSubmit={addDomain}>
-        <div className="field"><label htmlFor="new-domain">Email domain</label><input id="new-domain" type="text" required placeholder="nst.example" value={domain} onChange={(e) => setDomain(e.target.value)} /></div>
-        <div className="field" style={{ alignSelf: "end" }}><button className="button primary" disabled={busy}>Add approved domain</button></div>
-      </form>
-      <div className="stack" style={{ marginTop: 16 }}>
-        {domains === null ? <div className="loading-skeleton" /> : domains.length ? domains.map((item) => <div className="course-card row" key={item}><span className="mono">{item}</span><span className="badge green">Approved</span></div>) : <div className="empty"><span className="empty-mark">01</span><h3>No approved domains yet</h3><p>Add your institute's email domain to begin setting up access.</p></div>}
-      </div>
-      <div className="divider" />
-      <div id="teacher-invites"><h3>Invite a teacher</h3><p className="muted">Invitations grant a teacher role to the specified institutional email.</p>
-        <form className="form-grid" onSubmit={addInvitation}>
-          <div className="field"><label htmlFor="teacher-email">Teacher email</label><input id="teacher-email" type="email" required placeholder="name@institute.edu" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
-          <div className="field" style={{ alignSelf: "end" }}><button className="button primary" disabled={busy}>Add invitation</button></div>
-        </form>
-        <div className="stack" style={{ marginTop: 16 }}>
-          {invitations === null ? <div className="loading-skeleton" /> : invitations.length ? invitations.map((item) => <div className="course-card row" key={item.email}><span>{item.email}</span><span className="badge">Invited teacher</span></div>) : <div className="empty"><span className="empty-mark">02</span><h3>No teacher invitations</h3><p>Invited teachers will appear here once you add them.</p></div>}
-        </div>
-      </div>
-    </Panel>
-  </div>;
 }
 
 function TeacherWorkspace() {
@@ -635,7 +584,7 @@ function AuthenticatedRoutes() {
     signInUrl={routeUrl("/sign-in")}
     signUpUrl={routeUrl("/sign-up")}
     localization={{
-      signIn: { start: { title: "Welcome back", subtitle: "Sign in to your NST learning space." } },
+      signIn: { start: { title: "Welcome back", subtitle: "Sign in to EdCurie." } },
       signUp: { start: { title: "Join your institute", subtitle: "Create your EdCurie account." } },
     }}
     routerPush={(to) => setLocation(stripBase(to))}

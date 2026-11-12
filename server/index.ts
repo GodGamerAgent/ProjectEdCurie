@@ -21,5 +21,11 @@ if (process.env.NODE_ENV === "production") {
 } else {
   const vite = await createViteServer({ server: { middlewareMode: true, ws: { server } }, appType: "spa" });
   app.use(vite.middlewares);
+  // Replit can restore the legacy Vite port mapping for the direct development
+  // URL. Serve the same authenticated app there rather than a WebSocket-only
+  // endpoint; the preview and primary server remain on port 5000.
+  const directUrlServer = createServer(app);
+  directUrlServer.on("upgrade", (req, socket, head) => server.emit("upgrade", req, socket, head));
+  directUrlServer.listen(24678, "0.0.0.0");
 }
 server.listen(5000, "0.0.0.0", () => console.log("EdCurie listening on port 5000"));

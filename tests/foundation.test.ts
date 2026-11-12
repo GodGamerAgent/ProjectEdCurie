@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { Pool } from "pg";
 import { createApi } from "../server/routes";
-import { provisionVerifiedIdentity, type AppUser } from "../server/auth";
+import { HttpError, provisionVerifiedIdentity, type AppUser } from "../server/auth";
 
 if (!process.env.TEST_DATABASE_URL || !/^postgresql:\/\/[^@]+@127\.0\.0\.1:\d+\/edcurie_test$/.test(process.env.TEST_DATABASE_URL)) {
   throw new Error("Tests require a disposable local edcurie_test database. Run npm run test:isolated.");
@@ -11,13 +11,15 @@ const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const actors: Record<string, AppUser> = {};
 const app = createApi(db, async (req) => {
   const user = actors[String(req.headers["x-test-actor"])];
-  if (!user) throw new Error("Unknown isolated test actor");
+  if (!user) throw new HttpError(401, "Sign in is required.");
   return user;
 }, async () => {});
 const as = (name: string) => ({ "x-test-actor": name });
 let courseId: string;
 let resourceId: string;
 let assessmentId: string;
+let instituteId: string;
+let otherInstituteId: string;
 
 function samplePdf() {
   const stream = "BT /F1 12 Tf 72 720 Td (Test lesson from page one.) Tj ET";
@@ -44,37 +46,57 @@ function samplePdf() {
 beforeAll(async () => {
   const empty = await db.query("SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM courses) AS courses, (SELECT count(*) FROM approved_domains) AS domains");
   expect(empty.rows[0]).toEqual({ users: "0", courses: "0", domains: "0" });
-  await expect(provisionVerifiedIdentity(db, "admin", "admin@example.edu", false, "admin@example.edu")).rejects.toThrow("verified institutional email");
-  await expect(provisionVerifiedIdentity(db, "wrong", "wrong@example.edu", true, "admin@example.edu")).rejects.toThrow("domain has not been approved");
-  actors.admin = await provisionVerifiedIdentity(db, "admin", "admin@example.edu", true, "admin@example.edu");
+  await expect(provisionVerifiedIdentity(db, "admin", "admin@personal.example", false, "admin@personal.example")).rejects.toThrow("verified primary email");
+  await expect(provisionVerifiedIdentity(db, "wrong", "wrong@example.edu", true, "admin@personal.example")).rejects.toThrow("domain has not been approved");
+  actors.admin = await provisionVerifiedIdentity(db, "admin", "admin@personal.example", true, "admin@personal.example");
   expect(actors.admin.role).toBe("admin");
   expect((await db.query("SELECT count(*) FROM approved_domains")).rows[0].count).toBe("0");
-  await expect(provisionVerifiedIdentity(db, "blocked", "blocked@example.edu", true, "admin@example.edu")).rejects.toThrow("domain has not been approved");
+  await expect(provisionVerifiedIdentity(db, "admin", "admin@personal.example", false, "admin@personal.example")).rejects.toThrow("verified primary email");
+  expect((await provisionVerifiedIdentity(db, "admin", "admin@personal.example", true, "admin@personal.example")).role).toBe("admin");
+  await expect(provisionVerifiedIdentity(db, "different", "different@personal.example", true, "different@personal.example")).rejects.toThrow("different account already holds");
+  await expect(provisionVerifiedIdentity(db, "blocked", "blocked@example.edu", true, "admin@personal.example")).rejects.toThrow("domain has not been approved");
+  const institute = await request(app).post("/api/admin/institutes").set(as("admin")).send({ displayName: "Institute A" });
+  expect(institute.status).toBe(201); instituteId = institute.body.id;
+  const other = await request(app).post("/api/admin/institutes").set(as("admin")).send({ displayName: "Institute B" });
+  expect(other.status).toBe(201); otherInstituteId = other.body.id;
+  expect((await request(app).post(`/api/admin/institutes/${instituteId}/domains`).set(as("admin")).send({ domain: "example.edu" })).status).toBe(201);
+  expect((await request(app).post(`/api/admin/institutes/${otherInstituteId}/domains`).set(as("admin")).send({ domain: "other.edu" })).status).toBe(201);
   for (const [name, email, role] of [
     ["teacher", "teacher@example.edu", "teacher"],
     ["otherTeacher", "otherteacher@example.edu", "teacher"], ["student", "student@example.edu", "student"],
     ["outsider", "outsider@example.edu", "student"]
   ]) {
-    const result = await db.query("INSERT INTO users (provider_id,email,role) VALUES ($1,$2,$3) RETURNING id,email,role", [name, email, role]);
+    const result = await db.query('INSERT INTO users (provider_id,email,role,institute_id) VALUES ($1,$2,$3,$4) RETURNING id,email,role,institute_id AS "instituteId"', [name, email, role, instituteId]);
     actors[name] = result.rows[0];
   }
+  actors.otherInstituteStudent = await provisionVerifiedIdentity(db, "other-student", "student@other.edu", true, "admin@personal.example");
+  const otherTeacher = await db.query(`INSERT INTO users (provider_id,email,role,institute_id) VALUES ('other-teacher','teacher@other.edu','teacher',$1) RETURNING id,email,role,institute_id AS "instituteId"`, [otherInstituteId]);
+  actors.otherInstituteTeacher = otherTeacher.rows[0];
 });
 afterAll(async () => { await db.end(); });
 
 describe("foundation access and onboarding", () => {
   it("creates a teacher-assigned course and enrolls only the intended student", async () => {
-    expect((await request(app).post("/api/admin/domains").set(as("admin")).send({ domain: "example.edu" })).status).toBe(201);
-    const newStudent = await provisionVerifiedIdentity(db, "prospective", "prospective@example.edu", true, "admin@example.edu");
+    const newStudent = await provisionVerifiedIdentity(db, "prospective", "prospective@example.edu", true, "admin@personal.example");
     expect(newStudent.role).toBe("student");
-    expect((await request(app).post("/api/admin/invitations").set(as("admin")).send({ email: "prospective@example.edu" })).status).toBe(201);
-    expect((await provisionVerifiedIdentity(db, "prospective", "prospective@example.edu", true, "admin@example.edu")).role).toBe("teacher");
-    expect((await request(app).post("/api/admin/domains").set(as("student")).send({ domain: "other.edu" })).status).toBe(403);
+    expect((await request(app).post(`/api/admin/institutes/${instituteId}/invitations`).set(as("admin")).send({ email: "prospective@example.edu" })).status).toBe(201);
+    expect((await provisionVerifiedIdentity(db, "prospective", "prospective@example.edu", true, "admin@personal.example")).role).toBe("teacher");
+    expect((await request(app).post(`/api/admin/institutes/${instituteId}/domains`).set(as("student")).send({ domain: "third.edu" })).status).toBe(403);
     const course = await request(app).post("/api/courses").set(as("teacher")).send({ title: "Test course", description: "" });
     expect(course.status).toBe(201);
     courseId = course.body.id;
     expect((await request(app).post(`/api/courses/${courseId}/enrollments`).set(as("teacher")).send({ email: actors.student.email })).status).toBe(201);
     expect((await request(app).get(`/api/courses/${courseId}/onboarding`).set(as("outsider"))).status).toBe(403);
     expect((await request(app).get(`/api/courses/${courseId}`).set(as("otherTeacher"))).status).toBe(403);
+  });
+  it("requires explicit institute assignment for a legacy teacher", async () => {
+    await db.query("INSERT INTO users (provider_id,email,role) VALUES ('legacy-teacher','legacy@example.edu','teacher')");
+    await db.query("INSERT INTO teacher_invitations (email,invited_by) VALUES ('legacy@example.edu',$1)", [actors.admin.id]);
+    await expect(provisionVerifiedIdentity(db, "legacy-teacher", "legacy@example.edu", true, "admin@personal.example")).rejects.toThrow("not assigned to this institute");
+    expect((await request(app).post(`/api/admin/institutes/${instituteId}/invitations`).set(as("admin")).send({ email: "legacy@example.edu" })).status).toBe(201);
+    const teacher = await provisionVerifiedIdentity(db, "legacy-teacher", "legacy@example.edu", true, "admin@personal.example");
+    expect(teacher.role).toBe("teacher");
+    expect(teacher.instituteId).toBe(instituteId);
   });
   it("blocks the no-resource and draft-resource states on both UI API and assessment API", async () => {
     const empty = await request(app).get(`/api/courses/${courseId}/onboarding`).set(as("student"));
@@ -116,6 +138,29 @@ describe("foundation access and onboarding", () => {
     expect(start.body.questions[0].answer).toBeUndefined();
     const submit = await request(app).post(`/api/courses/${courseId}/assessment/submit`).set(as("student")).send({ answers: { [start.body.questions[0].id]: "My answer" } });
     expect(submit.status).toBe(201);
+  });
+  it("isolates institute branding, domains, invitations, courses and files", async () => {
+    expect((await request(app).get("/api/me").set(as("admin"))).body.institute).toBeNull();
+    expect((await request(app).get("/api/me").set(as("student"))).body.institute.displayName).toBe("Institute A");
+    expect((await request(app).get("/api/me").set(as("otherInstituteStudent"))).body.institute.displayName).toBe("Institute B");
+    expect((await request(app).post(`/api/admin/institutes/${otherInstituteId}/domains`).set(as("admin")).send({ domain: "example.edu" })).status).toBe(409);
+    expect((await request(app).post(`/api/admin/institutes/${otherInstituteId}/invitations`).set(as("admin")).send({ email: "teacher@example.edu" })).status).toBe(400);
+    const logo = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1kAAAAASUVORK5CYII=", "base64");
+    expect((await request(app).post(`/api/admin/institutes/${instituteId}/logo`).set(as("admin")).attach("logo", logo, { filename: "logo.png", contentType: "image/png" })).status).toBe(200);
+    expect((await request(app).get("/api/institute/logo").set(as("student"))).status).toBe(200);
+    expect((await request(app).get("/api/institute/logo").set(as("otherInstituteStudent"))).status).toBe(404);
+    expect((await request(app).get("/api/institute/logo").set(as("admin"))).status).toBe(404);
+    expect((await request(app).get(`/api/admin/institutes/${instituteId}/logo`).set(as("student"))).status).toBe(403);
+    expect((await request(app).get("/api/institute/logo")).status).toBe(401);
+    // Even corrupted cross-institute enrollment and assignment rows grant no access.
+    await db.query("INSERT INTO enrollments (course_id,email) VALUES ($1,$2)", [courseId, actors.otherInstituteStudent.email]);
+    await db.query("INSERT INTO course_teachers (course_id,user_id) VALUES ($1,$2)", [courseId, actors.otherInstituteTeacher.id]);
+    for (const actor of ["otherInstituteStudent", "otherInstituteTeacher"]) {
+      expect((await request(app).get("/api/courses").set(as(actor))).body.courses).toEqual([]);
+      expect((await request(app).get(`/api/courses/${courseId}`).set(as(actor))).status).toBe(403);
+      expect((await request(app).get(`/api/courses/${courseId}/onboarding`).set(as(actor))).status).toBe(403);
+      expect((await request(app).get(`/api/resources/${resourceId}/file`).set(as(actor))).status).toBe(403);
+    }
   });
   it("rechecks source publication and rejects cross-course sources", async () => {
     const second = await request(app).post("/api/courses").set(as("teacher")).send({ title: "Second course" });

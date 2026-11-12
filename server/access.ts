@@ -21,17 +21,18 @@ export function normalizeEmail(value: unknown) {
 }
 export async function courseAccess(db: Pool, user: AppUser, courseId: string) {
   uuid(courseId);
+  if (!user.instituteId) throw new HttpError(403, "Your account is not associated with an institute.");
   const result = await db.query(
-    `SELECT c.id,c.title,c.description,
+    `SELECT c.id,c.title,c.description,c.institute_id,
        EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id=c.id AND ct.user_id=$2) AS assigned,
        EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id=c.id AND e.email=$3) AS enrolled
-     FROM courses c WHERE c.id=$1`, [courseId, user.id, user.email]
+     FROM courses c WHERE c.id=$1 AND c.institute_id=$4`, [courseId, user.id, user.email, user.instituteId]
   );
   const course = result.rows[0];
   const teacher = user.role === "teacher" && course?.assigned;
   const student = user.role === "student" && course?.enrolled;
   if (!teacher && !student) throw new HttpError(403, "You are not assigned to or enrolled in this course.");
-  return { course: { id: course.id, title: course.title, description: course.description }, teacher: Boolean(teacher) };
+  return { course: { id: course.id, title: course.title, description: course.description }, instituteId: course.institute_id as string, teacher: Boolean(teacher) };
 }
 export async function teacherCourse(db: Pool, user: AppUser, courseId: string) {
   const access = await courseAccess(db, user, courseId);

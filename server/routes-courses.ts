@@ -8,19 +8,21 @@ export function courseRoutes(db: Pool) {
   router.get("/api/courses", async (_req, res) => {
     const user = currentUser(res);
     if (user.role === "admin") return res.json({ courses: [] });
+    if (!user.instituteId) throw new HttpError(403, "Your account is not associated with an institute.");
     const result = user.role === "teacher"
-      ? await db.query("SELECT c.id,c.title,c.description FROM courses c JOIN course_teachers ct ON ct.course_id=c.id WHERE ct.user_id=$1 ORDER BY c.created_at", [user.id])
-      : await db.query("SELECT c.id,c.title,c.description FROM courses c JOIN enrollments e ON e.course_id=c.id WHERE e.email=$1 ORDER BY c.created_at", [user.email]);
+      ? await db.query("SELECT c.id,c.title,c.description FROM courses c JOIN course_teachers ct ON ct.course_id=c.id WHERE ct.user_id=$1 AND c.institute_id=$2 ORDER BY c.created_at", [user.id, user.instituteId])
+      : await db.query("SELECT c.id,c.title,c.description FROM courses c JOIN enrollments e ON e.course_id=c.id WHERE e.email=$1 AND c.institute_id=$2 ORDER BY c.created_at", [user.email, user.instituteId]);
     res.json({ courses: result.rows.map((course) => ({ ...course, role: user.role })) });
   });
   router.post("/api/courses", async (req, res) => {
     const user = currentUser(res); requireRole(user, "teacher");
+    if (!user.instituteId) throw new HttpError(403, "Your account is not associated with an institute.");
     const title = cleanString(req.body.title, "Course title", 200);
     const description = typeof req.body.description === "string" ? req.body.description.trim().slice(0, 2000) : "";
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-      const result = await client.query("INSERT INTO courses (title,description) VALUES ($1,$2) RETURNING id,title,description", [title, description]);
+      const result = await client.query("INSERT INTO courses (title,description,institute_id) VALUES ($1,$2,$3) RETURNING id,title,description", [title, description, user.instituteId]);
       await client.query("INSERT INTO course_teachers (course_id,user_id) VALUES ($1,$2)", [result.rows[0].id, user.id]);
       await client.query("COMMIT");
       res.status(201).json(result.rows[0]);
@@ -41,9 +43,9 @@ export function courseRoutes(db: Pool) {
     res.json({ course, resources: resources.rows, assessments: enriched, enrollments: enrollments.rows });
   });
   router.post("/api/courses/:id/enrollments", async (req, res) => {
-    const user = currentUser(res); await teacherCourse(db, user, req.params.id);
+    const user = currentUser(res); const access = await teacherCourse(db, user, req.params.id);
     const email = normalizeEmail(req.body.email);
-    const allowed = await db.query("SELECT 1 FROM approved_domains WHERE domain=$1", [email.split("@")[1]]);
+    const allowed = await db.query("SELECT 1 FROM approved_domains WHERE domain=$1 AND institute_id=$2", [email.split("@")[1], access.instituteId]);
     if (!allowed.rowCount) throw new HttpError(400, "The student's email domain must be approved by an administrator.");
     await db.query("INSERT INTO enrollments (course_id,email) VALUES ($1,$2) ON CONFLICT DO NOTHING", [req.params.id, email]);
     res.status(201).json({ email });

@@ -2,25 +2,36 @@ import { pgTable, uuid, text, timestamp, uniqueIndex, jsonb, customType } from "
 
 const bytes = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
+export const institutes = pgTable("institutes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  displayName: text("display_name").notNull(),
+  logoData: bytes("logo_data"),
+  logoMime: text("logo_mime"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
   providerId: text("provider_id").notNull().unique(),
   email: text("email").notNull().unique(),
   role: text("role").notNull(),
+  instituteId: uuid("institute_id").references(() => institutes.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 export const domains = pgTable("approved_domains", {
-  domain: text("domain").primaryKey()
+  domain: text("domain").primaryKey(),
+  instituteId: uuid("institute_id").references(() => institutes.id)
 });
 export const invitations = pgTable("teacher_invitations", {
   email: text("email").primaryKey(),
   invitedBy: uuid("invited_by").notNull().references(() => users.id),
+  instituteId: uuid("institute_id").references(() => institutes.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 export const courses = pgTable("courses", {
   id: uuid("id").defaultRandom().primaryKey(),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
+  instituteId: uuid("institute_id").references(() => institutes.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 export const courseTeachers = pgTable("course_teachers", {
