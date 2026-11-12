@@ -60,9 +60,27 @@ function ReviewVault({courseId,baselineReady,refreshKey}:{courseId:string|number
 }
 function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineReady:boolean}) {
   type Mock={id:string;status:string;questions:{id:string;conceptId:string;conceptName:string;difficulty:number;prompt:string;sourceTitle:string;sourceLocation:string}[];
-    answers:Record<string,string>;teacherReview?:string|null;result:{score:number;correctCount:number;questionCount:number;details:{questionId:string;prompt:string;answer:string;expectedAnswer:string;correct:boolean}[];message:string}|null};
+    answers:Record<string,string>;remainingMs:number|null;teacherReview?:string|null;result:{score:number;correctCount:number;questionCount:number;details:{questionId:string;prompt:string;answer:string;expectedAnswer:string;correct:boolean}[];message:string;timeExpired?:boolean}|null};
   const [mock,setMock]=useState<Mock|null>(null),[draft,setDraft]=useState<Record<string,string>>({});
   const [history,setHistory]=useState<Mock[]>([]);
+  const [timeLimit,setTimeLimit]=useState("");
+  const [countdownEnd,setCountdownEnd]=useState<number|null>(null);
+  const [remainingMs,setRemainingMs]=useState<number|null>(null);
+  const timeExpired=remainingMs===0;
+  const seconds=Math.ceil((remainingMs??0)/1000);
+  function openMock(next:Mock) {
+    setMock(next);
+    setDraft(next.answers);
+    setRemainingMs(next.remainingMs);
+    setCountdownEnd(next.remainingMs===null ? null : performance.now()+next.remainingMs);
+  }
+  useEffect(()=>{
+    if(countdownEnd===null || mock?.status!=="active")return;
+    const tick=()=>setRemainingMs(Math.max(0,countdownEnd-performance.now()));
+    tick();
+    const interval=window.setInterval(tick,250);
+    return ()=>window.clearInterval(interval);
+  },[countdownEnd,mock?.status]);
   const [busy,setBusy]=useState(false),[error,setError]=useState("");
   async function act(action:()=>Promise<void>){setBusy(true);setError("");try{await action();}catch(e){setError(e instanceof Error?e.message:"Mock could not be saved.");}finally{setBusy(false);}}
   const loadHistory=useCallback(async()=>{if(!baselineReady){setHistory([]);return;}setHistory((await api<{sessions:Mock[]}>(`/api/courses/${courseId}/mocks/history`)).sessions);},[courseId,baselineReady]);
@@ -70,28 +88,45 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
   return <section className="study-section"><div className="divider"/><div className="eyebrow">Assessment practice</div><h3>Adaptive mock</h3>
     <p className="muted">Mocks prioritize topics with incorrect or limited evidence, then use teacher-estimated concept difficulty and your last mock score to adjust challenge. Scores remain separate from mastery.</p>
     {error&&<div className="notice error" role="alert">{error}</div>}
-     {!baselineReady?<p className="muted">Complete the baseline to unlock mocks.</p>:<><button className="button" disabled={busy} onClick={()=>void act(async()=>{
-      const next=await api<Mock>(`/api/courses/${courseId}/mocks/start`,{method:"POST"});setMock(next);setDraft(next.answers||{});
-     })}>{mock?.status==="active"?"Resume mock":"Start adaptive mock"}</button>
-     {history.length>0&&<details style={{marginTop:12}}><summary>Previous mocks ({history.length})</summary><div className="stack" style={{marginTop:10}}>{history.map(item=><div className="course-card row" key={item.id}><span><strong>{item.result?.score}% · {item.result?.correctCount}/{item.result?.questionCount}</strong><small>{item.teacherReview?"Teacher feedback available":"Submitted mock"}</small></span><button className="button small" disabled={busy} onClick={()=>void act(async()=>{setMock(await api<Mock>(`/api/mock-sessions/${item.id}`));setDraft(item.answers||{});})}>View result</button></div>)}</div></details>}
+    {!baselineReady?<p className="muted">Complete the baseline to unlock mocks.</p>:<>
+      {mock?.status!=="active"&&<div className="field">
+        <label htmlFor="mock-time-limit">Time limit for a new mock</label>
+        <select id="mock-time-limit" value={timeLimit} onChange={e=>setTimeLimit(e.target.value)}>
+          <option value="">Untimed</option>
+          {[5,10,20,30].map(minutes=><option key={minutes} value={minutes}>{minutes} minutes</option>)}
+        </select>
+      </div>}
+      <button className="button" disabled={busy||mock?.status==="active"} onClick={()=>void act(async()=>{
+        openMock(await api<Mock>(`/api/courses/${courseId}/mocks/start`,{
+          method:"POST",body:jsonBody({timeLimitMinutes:timeLimit ? Number(timeLimit) : null})
+        }));
+      })}>Start or resume mock</button>
+     {history.length>0&&<details style={{marginTop:12}}><summary>Previous mocks ({history.length})</summary><div className="stack" style={{marginTop:10}}>{history.map(item=><div className="course-card row" key={item.id}><span><strong>{item.result?.score}% · {item.result?.correctCount}/{item.result?.questionCount}</strong><small>{item.teacherReview?"Teacher feedback available":"Submitted mock"}</small></span><button className="button small" disabled={busy} onClick={()=>void act(async()=>{openMock(await api<Mock>(`/api/mock-sessions/${item.id}`));})}>View result</button></div>)}</div></details>}
      </>}
-    {mock?.status==="active"&&<div className="stack" style={{marginTop:16}}>{mock.questions.map((q,i)=><div className="course-card" key={q.id}>
+    {mock?.status==="active"&&<div className="stack" style={{marginTop:16}}>
+      {remainingMs!==null&&<div className="notice">
+        <strong role="timer">{timeExpired?"Time is up":`Time left: ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,"0")}`}</strong>
+        <p>{timeExpired?"View the result for the answers you saved.":"Save each answer as you go. The timer keeps running if you leave or refresh."}</p>
+      </div>}
+      {mock.questions.map((q,i)=><div className="course-card" key={q.id}>
       <div className="eyebrow">Question {i+1} · {q.conceptName} · challenge {q.difficulty}/5</div><p>{q.prompt}</p><p className="muted">Source: {q.sourceTitle} · {q.sourceLocation}</p>
-      <div className="field"><label htmlFor={`mock-${q.id}`}>Your answer</label><input id={`mock-${q.id}`} value={draft[q.id]??mock.answers[q.id]??""} onChange={e=>setDraft({...draft,[q.id]:e.target.value})}/></div>
-      <button className="button small" disabled={busy||!String(draft[q.id]??mock.answers[q.id]??"").trim()} onClick={()=>void act(async()=>{
+      <div className="field"><label htmlFor={`mock-${q.id}`}>Your answer</label><input id={`mock-${q.id}`} disabled={busy||timeExpired} value={draft[q.id]??mock.answers[q.id]??""} onChange={e=>setDraft({...draft,[q.id]:e.target.value})}/></div>
+      <button className="button small" disabled={busy||timeExpired||!String(draft[q.id]??mock.answers[q.id]??"").trim()} onClick={()=>void act(async()=>{
         const answer=draft[q.id]??mock.answers[q.id];await api(`/api/mock-sessions/${mock.id}/answer`,{method:"POST",body:jsonBody({questionId:q.id,answer})});
         setMock({...mock,answers:{...mock.answers,[q.id]:answer}});
       })}>Save answer</button>
     </div>)}
-      <button className="button primary" disabled={busy||mock.questions.some(q=>!String(mock.answers[q.id]??draft[q.id]??"").trim())} onClick={()=>void act(async()=>{
-        for(const q of mock.questions){const answer=mock.answers[q.id]??draft[q.id];await api(`/api/mock-sessions/${mock.id}/answer`,{method:"POST",body:jsonBody({questionId:q.id,answer})});}
-        const result=await api<NonNullable<Mock["result"]>>(`/api/mock-sessions/${mock.id}/submit`,{method:"POST"});
+      <button className="button primary" disabled={busy||(!timeExpired&&mock.questions.some(q=>!String(draft[q.id]??mock.answers[q.id]??"").trim()))} onClick={()=>void act(async()=>{
+        const result=await api<NonNullable<Mock["result"]>>(`/api/mock-sessions/${mock.id}/submit`,{
+          method:"POST",body:jsonBody(timeExpired ? {} : {answers:draft})
+        });
         setMock({...mock,status:"completed",result});await loadHistory();
-      })}>Submit mock</button>
+      })}>{timeExpired?"View timed result":"Submit mock"}</button>
     </div>}
     {mock?.status==="completed"&&mock.result&&<div className="course-card" style={{marginTop:16}}><strong>Mock result: {mock.result.score}%</strong><p>{mock.result.correctCount} of {mock.result.questionCount} correct. Mastery evidence was not changed.</p>
+       {mock.result.timeExpired&&<p>{mock.result.message}</p>}
        {mock.teacherReview&&<div className="notice" role="status"><strong>Teacher feedback</strong><p>{mock.teacherReview}</p></div>}
-       {mock.result.details.map((d,i)=><div key={d.questionId} className="notice" style={{marginTop:10}}><strong>Question {i+1} · {d.correct?"Correct":"Review"}</strong><p>{d.prompt}</p><p>Your answer: {d.answer}</p><p>Expected answer: {d.expectedAnswer}</p></div>)}
+       {mock.result.details.map((d,i)=><div key={d.questionId} className="notice" style={{marginTop:10}}><strong>Question {i+1} · {d.correct?"Correct":"Review"}</strong><p>{d.prompt}</p><p>Your answer: {d.answer||"Unanswered"}</p><p>Expected answer: {d.expectedAnswer}</p></div>)}
     </div>}
   </section>;
 }

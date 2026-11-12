@@ -377,6 +377,7 @@ export const adaptiveMockSessions = pgTable("adaptive_mock_sessions",{
   questionCount: integer("question_count").notNull(),
   result: jsonb("result"),
   createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at",{withTimezone:true}),
   completedAt: timestamp("completed_at",{withTimezone:true})
 },table=>[uniqueIndex("adaptive_mock_one_active_per_course").on(table.userId,table.courseId).where(sql`${table.status}='active'`)]);
 export const mockReviews = pgTable("mock_reviews",{

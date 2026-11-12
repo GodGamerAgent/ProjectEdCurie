@@ -551,10 +551,37 @@ describe("foundation access and onboarding", () => {
       .toBe("Revisit the source explanation for the first concept.");
     const after=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts;
     expect(after.map((c:any)=>c.independent_attempts)).toEqual(before.map((c:any)=>c.independent_attempts));
-    const adapted=await request(app).post(`/api/courses/${course.id}/mocks/start`).set(as("student"));
+    const startMock = `/api/courses/${course.id}/mocks/start`;
+    expect((await request(app).post(startMock).set(as("student")).send({timeLimitMinutes: -5})).status).toBe(400);
+    const adapted=await request(app).post(startMock).set(as("student")).send({timeLimitMinutes: 5});
     expect(adapted.status).toBe(201);
     expect(adapted.body.questions[0].conceptId).toBe(untouched.id);
     expect(adapted.body.questions[0].difficulty).toBe(5);
+    expect(adapted.body.remainingMs).toBeGreaterThan(0);
+    expect(adapted.body.remainingMs).toBeLessThanOrEqual(300_000);
+
+    const timedUrl = `/api/mock-sessions/${adapted.body.id}`;
+    const firstQuestion = adapted.body.questions[0].id;
+    expect((await request(app).post(`${timedUrl}/answer`).set(as("student")).send({questionId:firstQuestion,answer:"yes"})).status).toBe(200);
+    const resumed = await request(app).post(startMock).set(as("student")).send({timeLimitMinutes: 30});
+    expect(resumed.body).toMatchObject({id:adapted.body.id,expiresAt:adapted.body.expiresAt,answers:{[firstQuestion]:"yes"}});
+    await db.query("UPDATE adaptive_mock_sessions SET expires_at=now()-interval '1 second' WHERE id=$1", [adapted.body.id]);
+    expect((await request(app).get(timedUrl).set(as("student"))).body.remainingMs).toBe(0);
+    expect((await request(app).post(`${timedUrl}/answer`).set(as("student")).send({questionId:firstQuestion,answer:"no"})).status).toBe(409);
+    const lateAnswers = Object.fromEntries(adapted.body.questions.map((q:any)=>[q.id,"yes"]));
+    const expired = await request(app).post(`${timedUrl}/submit`).set(as("student")).send({answers:lateAnswers});
+    expect(expired.body).toMatchObject({score:25,correctCount:1,questionCount:4,timeExpired:true});
+    expect(expired.body.details.find((q:any)=>q.questionId!==firstQuestion).answer).toBe("");
+    expect((await request(app).post(`${timedUrl}/submit`).set(as("student"))).body).toEqual(expired.body);
+
+    const next = (await request(app).post(startMock).set(as("student")).send({timeLimitMinutes: 10})).body;
+    const nextUrl = `/api/mock-sessions/${next.id}`;
+    const oldAnswerId = next.questions[0].id;
+    await request(app).post(`${nextUrl}/answer`).set(as("student")).send({questionId:oldAnswerId,answer:"no"});
+    const finalAnswers = Object.fromEntries(next.questions.map((q:any)=>[q.id,"yes"]));
+    const final = await request(app).post(`${nextUrl}/submit`).set(as("student")).send({answers:finalAnswers});
+    expect(final.body).toMatchObject({score:100,timeExpired:false});
+    expect((await request(app).get(nextUrl).set(as("student"))).body.answers).toEqual(finalAnswers);
   });
   it("routes assignment submissions through teacher review before exposing diagnosis",async()=>{
     const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated assignment review"})).body;

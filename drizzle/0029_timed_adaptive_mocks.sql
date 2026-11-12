@@ -1,0 +1,1 @@
+ALTER TABLE "adaptive_mock_sessions" ADD COLUMN "expires_at" timestamp with time zone;

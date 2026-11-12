@@ -5,16 +5,23 @@ import { cleanString, courseAccess, currentUser, requireRole, teacherCourse, uui
 import { studentReady } from "./routes-study";
 
 const normalize=(value:string)=>value.trim().replace(/\s+/g," ").toLocaleLowerCase("en-US");
+function remainingTime(expiresAt: Date | null) {
+  return expiresAt ? Math.max(0, expiresAt.getTime() - Date.now()) : null;
+}
 function clientView(session:any,teacherReview:string|null=null) {
   const questions=Array.isArray(session.questions)?session.questions.map((q:any)=>({id:q.id,conceptId:q.conceptId,conceptName:q.conceptName,
     difficulty:q.difficulty,prompt:q.prompt,sourceTitle:q.sourceTitle,sourceLocation:q.sourceLocation})):session.questions;
-  return {id:session.id,status:session.status,questions,answers:session.answers||{},result:session.status==="completed"?session.result:null,teacherReview};
+  return {id:session.id,status:session.status,questions,answers:session.answers||{},result:session.status==="completed"?session.result:null,teacherReview,expiresAt:session.expires_at,remainingMs:remainingTime(session.expires_at)};
 }
 export function mockRoutes(db:Pool) {
   const router=Router();
   router.post("/api/courses/:id/mocks/start",async(req,res)=>{
     const user=currentUser(res);requireRole(user,"student");const courseId=uuid(req.params.id);
     await studentReady(db,user,courseId);
+    const timeLimitMinutes = req.body?.timeLimitMinutes ?? null;
+    if (timeLimitMinutes !== null && ![5, 10, 20, 30].includes(timeLimitMinutes)) {
+      throw new HttpError(400, "Choose a supported mock time limit.");
+    }
     const client=await db.connect();
     try{
       await client.query("BEGIN");
@@ -36,8 +43,8 @@ export function mockRoutes(db:Pool) {
         WHERE a.course_id=$1 AND a.status='published' AND length(btrim(qv.answer))>0
          ORDER BY priority,abs(c.difficulty-$3),c.name,qv.question_id LIMIT 10`,[courseId,user.id,targetDifficulty])).rows;
       if(!questions.length)throw new HttpError(400,"No published, source-linked questions are available for a mock.");
-      const session=(await client.query(`INSERT INTO adaptive_mock_sessions(user_id,course_id,questions,question_count)
-        VALUES($1,$2,$3::jsonb,$4) RETURNING *`,[user.id,courseId,JSON.stringify(questions),questions.length])).rows[0];
+      const session=(await client.query(`INSERT INTO adaptive_mock_sessions(user_id,course_id,questions,question_count,expires_at)
+        VALUES($1,$2,$3::jsonb,$4,clock_timestamp()+make_interval(mins => $5::int)) RETURNING *`,[user.id,courseId,JSON.stringify(questions),questions.length,timeLimitMinutes])).rows[0];
       await client.query("COMMIT");res.status(201).json(clientView(session));
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });
@@ -85,6 +92,7 @@ export function mockRoutes(db:Pool) {
       if(!session)throw new HttpError(404,"Mock session not found.");
       await studentReady(db,user,session.course_id);
       if(session.status!=="active")throw new HttpError(409,"This mock is already submitted.");
+      if (remainingTime(session.expires_at) === 0) throw new HttpError(409, "Time is up. Submit your saved answers to view the result.");
       const questions=Array.isArray(session.questions)?session.questions:JSON.parse(session.questions);
       if(!questions.some((q:any)=>q.id===questionId))throw new HttpError(400,"That question is not part of this mock.");
       const answers=typeof session.answers==="string"?JSON.parse(session.answers):session.answers||{};
@@ -103,14 +111,34 @@ export function mockRoutes(db:Pool) {
       if(session.status==="completed"){await client.query("COMMIT");return res.json(session.result);}
       const questions=Array.isArray(session.questions)?session.questions:JSON.parse(session.questions);
       const answers=typeof session.answers==="string"?JSON.parse(session.answers):session.answers||{};
-      if(questions.some((q:any)=>typeof answers[q.id]!=="string"))throw new HttpError(400,"Answer every question before submitting.");
-      const details=questions.map((q:any)=>({questionId:q.id,conceptName:q.conceptName,prompt:q.prompt,answer:answers[q.id],
-        expectedAnswer:q.expectedAnswer,correct:normalize(answers[q.id])===normalize(q.expectedAnswer)}));
+      const timeExpired = remainingTime(session.expires_at) === 0;
+      const finalAnswers = req.body?.answers;
+      if (!timeExpired && finalAnswers !== undefined) {
+        const questionIds = new Set(questions.map((q: { id: string }) => q.id));
+        if (!finalAnswers || typeof finalAnswers !== "object" || Array.isArray(finalAnswers) ||
+          Object.entries(finalAnswers).some(([questionId, answer]) =>
+            !questionIds.has(questionId) || typeof answer !== "string" || answer.length > 5000)) {
+          throw new HttpError(400, "Invalid mock answers.");
+        }
+        for (const [questionId, answer] of Object.entries(finalAnswers as Record<string, string>)) {
+          answers[questionId] = answer.trim();
+        }
+      }
+      if (!timeExpired && questions.some((q:any) => !answers[q.id]?.trim())) {
+        throw new HttpError(400, "Answer every question before submitting.");
+      }
+      const details=questions.map((q:any)=>{
+        const answer = answers[q.id] ?? "";
+        return {questionId:q.id,conceptName:q.conceptName,prompt:q.prompt,answer,
+          expectedAnswer:q.expectedAnswer,correct:Boolean(answer.trim()) && normalize(answer)===normalize(q.expectedAnswer)};
+      });
       const correctCount=details.filter((q:any)=>q.correct).length,score=Math.round(100*correctCount/questions.length);
-      const result={score,correctCount,questionCount:questions.length,details,
-        message:"Mock submitted. This score is stored separately and does not change mastery evidence."};
-      await client.query(`UPDATE adaptive_mock_sessions SET status='completed',score=$2,correct_count=$3,result=$4::jsonb,completed_at=now() WHERE id=$1`,
-        [id,score,correctCount,JSON.stringify(result)]);
+      const result={score,correctCount,questionCount:questions.length,details,timeExpired,
+        message:timeExpired ? "Time is up. Your score uses answers saved before the deadline."
+          : "Mock submitted. This score is stored separately and does not change mastery evidence."};
+      await client.query(`UPDATE adaptive_mock_sessions SET status='completed',score=$2,correct_count=$3,result=$4::jsonb,
+        answers=$5::jsonb,completed_at=now() WHERE id=$1`,
+        [id,score,correctCount,JSON.stringify(result),JSON.stringify(answers)]);
       await client.query("COMMIT");res.json(result);
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });
