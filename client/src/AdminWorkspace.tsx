@@ -115,7 +115,7 @@ export default function AdminWorkspace() {
           <label className="field">PDF input<select value={aiStatus.pdfMode} onChange={e=>setAiStatus({...aiStatus,pdfMode:e.target.value as AISettings["pdfMode"]})}>
             <option value="vision">Page images</option><option value="file">Original PDF file</option>
           </select></label>
-          <p className="muted field full">Use Page images with Groq. Choose Original PDF file only if your provider accepts PDF attachments in Chat Completions. For a custom endpoint, set AI_PROVIDER_BASE_URL and AI_PROVIDER_API_KEY in Replit Secrets.</p>
+          <p className="muted field full">Use Page images with Groq or Gemma. For original PDFs with Google, use a Gemini document model such as gemini-3.8-flash. Other providers must accept PDF attachments in Chat Completions. Set AI_PROVIDER_BASE_URL and AI_PROVIDER_API_KEY in Replit Secrets for custom endpoints.</p>
           {!aiStatus.configured && <p className="notice field full">The selected provider needs an API key in Replit Secrets.</p>}
           <div><button className="button small primary" disabled={busy}>Save AI settings</button></div>
         </form>

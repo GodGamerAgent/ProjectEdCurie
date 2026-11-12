@@ -156,8 +156,30 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
   vi.stubGlobal("fetch",provider);
   try {
     const processPdf=()=>request(app).post(`/api/demo/resources/${resourceId}/process`).set(teacher);
+    const googleBase="https://generativelanguage.googleapis.com/v1beta/openai";
+    vi.stubEnv("AI_PROVIDER_BASE_URL",googleBase);
+    const googleSettings={baseUrl:googleBase,model:"gemini-3.8-flash",pdfMode:"file"};
+    expect((await request(app).put(settingsUrl).set(admin).send({...googleSettings,model:"gemma-4-31b-it"})).status).toBe(400);
+    expect((await request(app).put(settingsUrl).set(admin).send(googleSettings)).body).toEqual({...googleSettings,configured:true});
+    provider.mockResolvedValueOnce(new Response(JSON.stringify({error:{details:[{reason:"API_KEY_INVALID"}]}}),{status:400}));
+    expect((await processPdf()).body.error).toContain("Google rejected the API key");
+    provider.mockImplementationOnce(async (url,init)=>{
+      expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
+      expect(init.headers).toMatchObject({"x-goog-api-key":"custom-test-key"});
+      const body=JSON.parse(String(init.body));
+      expect(body.generationConfig.responseMimeType).toBe("application/json");
+      expect(body.contents[0].parts[1].inlineData).toEqual({mimeType:"application/pdf",data:original.toString("base64")});
+      const pages=[
+        {page:1,summary,problems:[{prompt,answer:"",quote:excerpt}]},
+        {page:2,summary:"Review the common difference.",problems:[]},
+      ];
+      return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({pages})}]}}]}));
+    });
+    expect((await processPdf()).body.remaining).toBe(0);
+    expect((await request(app).put(settingsUrl).set(admin).send({baseUrl:"https://api.groq.com/openai/v1",model:"qwen/qwen3.8-27b",pdfMode:"vision"})).status).toBe(200);
+    vi.stubEnv("AI_PROVIDER_BASE_URL","https://provider.example/v1");
     expect((await processPdf()).body.remaining).toBe(1);
-    expect((await teacherView()).body.resources[0].text).toBe("");
+    expect((await teacherView()).body.resources[0].text).toBe(notes);
     expect((await processPdf()).body.remaining).toBe(0);
     const processed=(await teacherView()).body.resources[0];
     expect(processed.parts[0].problems[0].quote).toBe(excerpt);
@@ -168,7 +190,7 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
     const savedSettings=await request(app).put(settingsUrl).set(admin).send(settings);
     expect(savedSettings.body).toEqual({...settings,configured:true});
     expect((await request(app).post(`/api/demo/resources/${resourceId}/process`).set(teacher)).body.remaining).toBe(0);
-    expect(provider).toHaveBeenCalledTimes(3);
+    expect(provider).toHaveBeenCalledTimes(5);
     expect((await request(app).put(settingsUrl).set(admin).send({baseUrl:"https://api.groq.com/openai/v1",model:"qwen/qwen3.8-27b",pdfMode:"vision"})).status).toBe(200);
     const versions=(await request(app).get(`/api/resources/${resourceId}/versions`).set(teacher)).body.versions;
     const versionUrl=`/api/resources/${resourceId}/versions/${versions[0].id}`;
