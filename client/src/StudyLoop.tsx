@@ -183,6 +183,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   const [targets,setTargets]=useState<{conceptId:string;name:string;reason:string}[]>([]);
   const [selected,setSelected]=useState(""); const [goal,setGoal]=useState("");const [deadline,setDeadline]=useState("");const [availability,setAvailability]=useState("");
   const [goalRefreshKey,setGoalRefreshKey]=useState(0),[plannedPhase,setPlannedPhase]=useState("");
+  const [focusSet,setFocusSet]=useState<{conceptId:string;started:number;total:number}|null>(null);
   const [reviewRefreshKey,setReviewRefreshKey]=useState(0);
    const [lesson,setLesson]=useState<{id:string;format?:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
   const [lessonFeedback,setLessonFeedback]=useState<boolean|null>(null),[formatRecommendation,setFormatRecommendation]=useState<FormatRecommendation|null>(null);
@@ -222,7 +223,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   }
   async function run(action:()=>Promise<void>){setBusy(true);setError("");setNotice("");try{await action();}catch(e){setError(e instanceof Error?e.message:"The action could not be completed.");}finally{setBusy(false);}}
   function saveGoal(e:FormEvent){e.preventDefault();void run(async()=>{await api(`/api/courses/${courseId}/goal`,{method:"PUT",body:jsonBody({goal,deadline,availability})});setNotice("Study goal saved.");setGoalRefreshKey(x=>x+1);});}
-  function openPlannedConcept(conceptId:string,phase:string){setSelected(conceptId);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);setPlannedPhase(phase);}
+  function openPlannedConcept(conceptId:string,phase:string){setSelected(conceptId);setFocusSet(null);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);setPlannedPhase(phase);}
   return <section className="study-section"><div className="divider"/><div className="eyebrow">Your study loop</div><h3>Goal and concept mastery</h3>
     {error && <div className="notice error" role="alert">{error}</div>}{notice && <div className="notice success" role="status">{notice}</div>}
     <form className="form-grid" onSubmit={saveGoal}><div className="field full"><label htmlFor="study-goal">Study goal</label><input id="study-goal" required value={goal} onChange={(e)=>setGoal(e.target.value)}/></div>
@@ -230,31 +231,35 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       <div className="field"><label htmlFor="study-availability">Availability</label><input id="study-availability" value={availability} onChange={(e)=>setAvailability(e.target.value)}/></div><div className="field"><button className="button" disabled={busy}>Save goal</button></div></form>
      <MilestonesPanel courseId={courseId}/>
     {baselineReady&&targets.length>0&&<div className="course-card" style={{marginTop:16}} aria-label="Suggested practice topics">
-      <strong>Practice a focus topic</strong><p className="muted">Suggestions use your saved answers and only include unused, published teacher questions. They are prompts to practice, not a diagnosis.</p>
+       <strong>Practice a focus topic</strong><p className="muted">Suggestions use your saved answers and only include unused, published teacher questions. A focused set offers up to three independent questions, saved one at a time; it is not a diagnosis.</p>
       {targets.map(target=><div className="row" key={target.conceptId} style={{marginTop:10}}>
         <div><strong>{target.name}</strong><p className="muted">{target.reason}</p></div>
         <button className="button small" disabled={busy} onClick={()=>void run(async()=>{
           setSelected(target.conceptId);setLesson(null);setHistory([]);setResult("");setWalkthrough("");
           const next=await api<{sessionId:string;prompt:string}>(`/api/concepts/${target.conceptId}/practice`,{method:"POST"});
-          setSession(next);setAnswer("");setHints([]);
+          setSession(next);setAnswer("");setHints([]);setFocusSet({conceptId:target.conceptId,started:1,total:3});
         })}>Start focused practice</button>
       </div>)}
     </div>}
     <p className="muted" style={{marginTop:20}}>Explanation format and hint style can be changed in Preferences.</p>
-    {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0} · Teacher-verified assignments {e?.verified_assignments||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Your teacher has not added concepts yet.</p>}
+     {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0} · Teacher-verified assignments {e?.verified_assignments||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setFocusSet(null);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Your teacher has not added concepts yet.</p>}
     {selected && <div className="resource-card" style={{marginTop:18}}><h3>{concepts.find((x)=>x.id===selected)?.name}</h3>
     {plannedPhase&&<p className="notice">Scheduled phase: {plannedPhase}. Use the matching lesson or practice action below, then mark the session complete in your plan.</p>}
     {followups.filter(f=>f.conceptId===selected).map(f=><div className="notice" key={f.originalSessionId} style={{marginBottom:12}}>
       <strong>Twin follow-up</strong><p>After: {f.originalPrompt}</p>
       {f.status==="completed"?<p>Twin completed. Its independent or assisted result is included in your evidence.</p>:f.status==="already_seen"?<p>You have already seen this variation. Ask your teacher for a fresh twin.</p>:<button className="button" disabled={busy} onClick={()=>void run(async()=>{
         const next=await api<{sessionId:string;prompt:string;kind:string;hints:string[];submitted:boolean;result:{message:string}|null}>(`/api/practice/${f.originalSessionId}/twin`,{method:"POST"});
-        setSession(next.submitted?null:next);setHints(next.hints);setAnswer("");setResult(next.result?.message||"");setWalkthrough("");
+         setFocusSet(null);setSession(next.submitted?null:next);setHints(next.hints);setAnswer("");setResult(next.result?.message||"");setWalkthrough("");
       })}>{f.status==="in_progress"?"Resume linked twin":"Solve linked twin"}</button>}
     </div>)}
     {concepts.find((x)=>x.id===selected)?.prerequisites?.length?<p className="muted">Prerequisites: {concepts.find((x)=>x.id===selected)?.prerequisites?.map((p)=>p.name).join(", ")}</p>:<p className="muted">No prerequisite relationship is available.</p>}
     <div className="card-actions">
       <button className="button primary" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{setLesson(await api(`/api/concepts/${selected}/lesson`,{method:"POST",body:jsonBody({format})}));setLessonFeedback(null);})}>Get lesson</button>
-      <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{setSession(await api(`/api/concepts/${selected}/practice`,{method:"POST"}));setAnswer("");setHints([]);setResult("");setWalkthrough("");})}>{result?"Next independent problem":"Practice question"}</button>
+      <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{
+        const inSet=focusSet?.conceptId===selected;
+        setSession(await api(`/api/concepts/${selected}/practice`,{method:"POST"}));setAnswer("");setHints([]);setResult("");setWalkthrough("");
+        if(inSet&&focusSet.started<focusSet.total)setFocusSet({...focusSet,started:focusSet.started+1});else setFocusSet(null);
+      })}>{result&&focusSet?.conceptId===selected&&focusSet.started<focusSet.total?`Next focus question · ${focusSet.total-focusSet.started} left`:result&&focusSet?.conceptId===selected?"Start another independent question":result?"Next independent problem":focusSet?.conceptId===selected?`Focused set · 1 of ${focusSet.total}`:"Practice question"}</button>
       <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{const data=await api<{lessons:typeof history}>(`/api/concepts/${selected}/lessons`);setHistory(data.lessons);})}>Previous lessons</button>
     </div>
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>
