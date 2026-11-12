@@ -70,8 +70,8 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | Groq setup and reliability | **Partial** | The key has been supplied. Server-only access, bounded excerpt/citation validation, timeout, one transient retry, per-user rate cap and metadata exist. Optional `GROQ_MODEL` defaults to `qwen/qwen3.8-27b`. Live provider behavior is **not verified**; this twin workflow requires no AI calls. |
 | Consistency and authorization | **Partial** | Baseline sessions, practice, twin follow-ups, and comprehension answers persist and guard duplicate submissions; teacher/student scope and publication are checked on server. |
 | Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 16 tests). One test covers the entire publish→baseline→cited lesson→twin→mastery path; the rest cover schedule/FSRS/mock flows, assignments, intake, timelines, format feedback, focus time, milestones, XP, and leaderboard privacy. Groq was mocked, not called live. |
-| Preview / direct development URL | **Pending tutor-message migration** | Apply the additive conversation migration, restart, and recheck the direct URL. Signed-in features require real NST accounts. |
-| Signed-in browser flow | **Pending owner verification** | With real NST teacher/student accounts, verify resource/baseline, lesson/practice/twin/review/mock, assignments and feedback, class schedule, and private availability. Do not use a test-login bypass. |
+| Preview / direct development URL | **Passed** | Additive schema changes are applied; workflow starts cleanly; landing and Clerk sign-in pages render; direct URL returns HTTP 200. |
+| Signed-in browser flow | **Pending owner verification** | Clerk sign-in UI renders, but no real NST login was performed. With real teacher/student accounts, run the exact MVP walkthrough above; do not use a test-login bypass. |
 
 ## Remaining implementation order
 
