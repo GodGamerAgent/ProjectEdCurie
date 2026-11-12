@@ -19,14 +19,14 @@ function Generator({ label, onGenerate, busy }: { label: string; onGenerate:(cou
   const [open,setOpen]=useState(false);
   return <div>
     <button type="button" className="button small" disabled={busy} onClick={()=>setOpen(!open)} aria-expanded={open}>{label}</button>
-    {open && <form className="form-grid" onSubmit={event=>{
+    {open && <form className="form-grid form-card" style={{marginTop:10}} onSubmit={event=>{
       event.preventDefault();
       const form=new FormData(event.currentTarget);
       onGenerate(Number(form.get("count")),String(form.get("instructions")??""));
     }}>
       <label className="field">Number of questions<input name="count" type="number" required min={1} max={8} defaultValue={2} /></label>
-      <MarkdownEditor label="Custom instructions" name="instructions" compact maxLength={1200} rows={3} placeholder="Optional. For example: focus on recursion, keep it to one step." />
-      <div><button className="button small primary" disabled={busy}>Generate</button></div>
+      <div className="grid-actions"><button className="button small primary" disabled={busy}>Generate</button><button type="button" className="button small quiet" onClick={()=>setOpen(false)}>Cancel</button></div>
+      <MarkdownEditor className="full" label="Custom instructions" name="instructions" compact maxLength={1200} rows={3} placeholder="Optional. For example: focus on recursion, keep it to one step." />
     </form>}
   </div>;
 }
@@ -45,22 +45,23 @@ function Students({base,students,reload,run,busy}:{base:string;students:Student[
     });
   }
   return <section className="stack">
-    <h3>Students</h3>
-    <form key={selected?.email??"new"} className="form-grid" onSubmit={save}>
+    <div className="section-title"><h3>Students</h3><span className="badge">{students.length} enrolled</span></div>
+    <form key={selected?.email??"new"} className="form-grid form-card" onSubmit={save}>
       <label className="field">Name<input name="name" required maxLength={160} defaultValue={selected?.name??""}/></label>
       <label className="field">Email ID<input name="email" required type="email" defaultValue={selected?.email}/></label>
       <label className="field">Date of birth<input name="dateOfBirth" type="date" required defaultValue={selected?.dateOfBirth??""}/></label>
       <label className="field">Enrollment date<input name="enrolledOn" type="date" required defaultValue={selected?.enrolledOn??""}/></label>
-      <div className="card-actions">
+      <div className="grid-actions full">
         <button className="button small primary" disabled={busy}>{selected?"Save student":"Add student"}</button>
-        {selected && <button type="button" className="button small" onClick={()=>setSelected(null)}>Cancel</button>}
+        {selected && <button type="button" className="button small quiet" onClick={()=>setSelected(null)}>Cancel</button>}
       </div>
     </form>
-    {students.map(student=><article className="course-card row" key={student.email}>
+    {students.length===0 && <p className="muted">No students yet. Add a student above to enroll them in this course.</p>}
+    {students.map(student=><article className="course-card list-card" key={student.email}>
       <div><strong>{student.name||student.email}</strong><p>{student.email}{student.dateOfBirth && ` · DOB ${student.dateOfBirth}`}{student.enrolledOn && ` · Enrolled ${student.enrolledOn}`}</p></div>
-      <div className="card-actions">
+      <div className="card-actions tight">
         <button className="button small" disabled={busy} onClick={()=>setSelected(student)}>Edit</button>
-        <button className="button small" disabled={busy} onClick={()=>{
+        <button className="button small danger-quiet" disabled={busy} onClick={()=>{
           if (!confirm(`Remove ${student.name || student.email} from this course?`)) return;
           void run(async()=>{await api(base+"/students/"+encodeURIComponent(student.email),{method:"DELETE"});if(selected?.email===student.email)setSelected(null);await reload();});
         }}>Delete</button>
@@ -172,17 +173,17 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
   const flagged=academic.filter(q=>suggestions[q.id]?.status==="needs_review" && !q.answer.trim());
   const blankAcademic=academic.filter(q=>!q.answer.trim());
   return <section className="stack">
-    <div className="row"><h3>Course onboarding</h3><span className="badge">{baseline.published?`Published · revision ${baseline.revision}`:"Draft"}</span></div>
-    <div className="card-actions">
-      <button className="button small" aria-pressed={view==="bank"} onClick={()=>setView("bank")}>Academic problem bank</button>
-      <button className="button small" aria-pressed={view==="questions"} onClick={()=>setView("questions")}>Baseline questions ({questions.length})</button>
+    <div className="section-title"><h3>Course onboarding</h3><span className={`badge ${baseline.published?"green":""}`}>{baseline.published?`Published · revision ${baseline.revision}`:"Draft"}</span></div>
+    <div className="tabs" role="group" aria-label="Onboarding view">
+      <button type="button" aria-pressed={view==="bank"} onClick={()=>setView("bank")}>Academic problem bank</button>
+      <button type="button" aria-pressed={view==="questions"} onClick={()=>setView("questions")}>Baseline questions ({questions.length})</button>
     </div>
     {notice && <p className="notice success" role="status">{notice}</p>}
     {issues.length>0 && <div className="notice error" role="alert">{issues.map((issue,i)=><div key={i}>{issue}</div>)}</div>}
     {view==="bank" && <>
       <label className="field">Resource<select value={filter} onChange={e=>setFilter(e.target.value)}><option value="">All processed resources</option>
         {bankResources.map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select></label>
-      {!bankResources.length && <p>Process a topic resource to populate the academic problem bank.</p>}
+      {!bankResources.length && <p className="muted">Process a topic resource to populate the academic problem bank.</p>}
       {selected.size>0 && <div className="card-actions sticky-actions"><span>{selected.size} selected</span>
         <button className="button small primary" disabled={busy} onClick={()=>{
           const chosen=resources.flatMap(r=>r.questions).filter(q=>selected.has(q.id));
@@ -191,7 +192,7 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
         }}>Add selected to baseline</button>
         <button className="button small" onClick={()=>setSelected(new Set())}>Clear selection</button></div>}
       {bankResources.filter(r=>!filter || filter===r.id).map(r=><article className="resource-card stack" key={r.id}>
-        <div className="row"><h4>{r.title}</h4>{r.status!=="published" && <span className="badge amber">Resource not published</span>}</div>
+        <div className="section-title"><h4>{r.title}</h4>{r.status!=="published" && <span className="badge amber">Resource not published</span>}</div>
         {r.summary.trim() && <>
           <details><summary>View resource summary</summary><div className="summary-body"><Markdown text={r.summary}/></div></details>
           <Generator label="Generate from this summary" busy={busy} onGenerate={(count,instructions)=>generate("academic",count,instructions,r.id)}/>
@@ -208,25 +209,30 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
       </article>)}
     </>}
     {view==="questions" && <>
+      <div className="inline-form">
+        <label className="field">Custom question type<select value={kind} onChange={e=>setKind(e.target.value as Kind)}>
+          <option value="academic">Academic</option><option value="preferences">Learning preferences</option>
+        </select></label>
+        <button className="button small" onClick={()=>setQuestions(q=>[...q,{id:crypto.randomUUID(),kind,prompt:"",answer:""}])}>Add custom question</button>
+      </div>
       <Generator label="Generate learning preference questions" busy={busy} onGenerate={(count,instructions)=>generate("preferences",count,instructions)}/>
-      <div className="card-actions"><label className="field">Custom question type<select value={kind} onChange={e=>setKind(e.target.value as Kind)}>
-        <option value="academic">Academic</option><option value="preferences">Learning preferences</option>
-      </select></label><button className="button small" onClick={()=>setQuestions(q=>[...q,{id:crypto.randomUUID(),kind,prompt:"",answer:""}])}>Add custom question</button></div>
       {questions.length===0 && <p className="muted">Add problems from the bank, generate questions, or write your own. Include at least one academic and one learning preference question before publishing.</p>}
       {academic.length>0 && <div className="card-actions sticky-actions" aria-label="Expected answer generation">
         <span>{chosen.size} academic selected</span>
         <button className="button small primary" disabled={busy || answering || !chosen.size} onClick={()=>void generateAnswers([...chosen])}>Generate answers for selected</button>
         <button className="button small" disabled={busy || answering || !blankAcademic.length} onClick={()=>void generateAnswers(blankAcademic.map(q=>q.id))}>Generate all blank answers ({blankAcademic.length})</button>
         {flagged.length>0 && <button className="button small" disabled={busy || answering} onClick={()=>void convertToMultipleChoice(flagged.map(q=>q.id))}>Convert flagged to multiple choice ({flagged.length})</button>}
-        <label className="select-row"><input type="checkbox" checked={replaceExisting} onChange={e=>setReplaceExisting(e.target.checked)}/> Replace existing answers</label>
-        {answering && <span role="status">Generating answers…</span>}
+        <label className="check"><input type="checkbox" checked={replaceExisting} onChange={e=>setReplaceExisting(e.target.checked)}/> Replace existing answers</label>
+        {answering && <span className="typing" role="status">Generating answers…</span>}
       </div>}
       {questions.map((q,i)=>{
         const suggestion=suggestions[q.id];
         return <article className="course-card stack" key={q.id}>
-        <div className="select-row">
-          {q.kind==="academic" && <input type="checkbox" aria-label={`Select question ${i+1}`} checked={chosen.has(q.id)} onChange={e=>setChosen(old=>{const next=new Set(old);if(e.target.checked)next.add(q.id);else next.delete(q.id);return next;})}/>}
-          <strong>{i+1}. {q.kind==="academic"?"Academic":"Learning preferences · open-ended, not scored"}</strong>
+        <div className="question-head">
+          {q.kind==="academic" && <input type="checkbox" className="check-input" aria-label={`Select question ${i+1}`} checked={chosen.has(q.id)} onChange={e=>setChosen(old=>{const next=new Set(old);if(e.target.checked)next.add(q.id);else next.delete(q.id);return next;})}/>}
+          <span className="question-num">{i+1}</span>
+          {q.kind==="academic" ? <span className="badge">Academic · scored</span> : <span className="badge violet">Learning preference · not scored</span>}
+          {q.kind==="academic" && !q.answer.trim() && <span className="badge amber">Needs an expected answer</span>}
         </div>
         <MarkdownEditor label="Question" value={q.prompt} maxLength={5000} rows={5} onChange={value=>update(q.id,{prompt:value})}/>
         {q.kind==="academic" && <>
@@ -248,11 +254,12 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
         </>}
         <div className="card-actions">
           {q.kind==="academic" && <button className="button small" disabled={busy || answering} onClick={()=>void generateAnswers([q.id])}>Generate expected answer</button>}
-          <button className="button small" onClick={()=>setQuestions(all=>all.filter(x=>x.id!==q.id))}>Remove question</button>
+          <span className="spacer"/>
+          <button className="button small danger-quiet" onClick={()=>setQuestions(all=>all.filter(x=>x.id!==q.id))}>Remove question</button>
         </div>
       </article>;})}
-      <div className="card-actions"><button className="button small" disabled={busy} onClick={()=>save(false)}>Save draft</button>
-        <button className="button small primary" disabled={busy || answering} onClick={()=>save(true)}>Publish baseline</button></div>
+      <div className="card-actions end"><button className="button" disabled={busy} onClick={()=>save(false)}>Save draft</button>
+        <button className="button primary" disabled={busy || answering} onClick={()=>save(true)}>Publish baseline</button></div>
     </>}
   </section>;
 }
@@ -290,25 +297,29 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
   }
   const selected=data?.topics.find(topic=>topic.id===topicId);
   return <div className="stack">
-    <div className="row"><div><h2>{data?.course.title||"Course workspace"}</h2>{data?.course.description && <Markdown text={data.course.description}/>}</div><button className="button small" onClick={onBack}>All courses</button></div>
-    <nav className="card-actions" aria-label="Course setup">{["Topics","Onboarding","Timetable","Students"].map(item=><button className="button small" type="button" key={item} aria-pressed={item===tab} disabled={busy} onClick={()=>setTab(item)}>{item}</button>)}</nav>
+    <div className="course-head"><div><div className="eyebrow">Course</div><h2>{data?.course.title||"Loading course…"}</h2>{data?.course.description && <Markdown text={data.course.description}/>}</div><button className="button small" onClick={onBack}>All courses</button></div>
+    <nav className="tabs" aria-label="Course setup">{["Topics","Onboarding","Timetable","Students"].map(item=><button type="button" key={item} aria-pressed={item===tab} disabled={busy} onClick={()=>setTab(item)}>{item}</button>)}</nav>
     {error && <p className="notice error" role="alert">{error}</p>}
-    {progress && <p role="status">{progress}</p>}
+    {progress && <p className="notice typing" role="status">{progress}</p>}
+    {!data && !error && <div className="stack"><div className="loading-skeleton"/><div className="loading-skeleton"/></div>}
     {data && <>
       {tab==="Topics" && <>
-        <form className="form-grid" onSubmit={e=>{
+        <form className="inline-form" onSubmit={e=>{
           e.preventDefault();const form=e.currentTarget;const title=new FormData(form).get("title");
           void run(async()=>{const topic=await api<Topic>(base+"/topics",{method:"POST",body:jsonBody({title})});form.reset();setTopicId(topic.id);await reload();});
-        }}><label className="field">Chapter or topic name<input name="title" required maxLength={200}/></label><div><button className="button small primary" disabled={busy}>Add topic</button></div></form>
-        <div className="card-actions">{data.topics.map(topic=><button className="button small" key={topic.id} aria-pressed={topic.id===topicId} onClick={()=>setTopicId(topic.id)}>{topic.title}</button>)}</div>
+        }}><label className="field">New chapter or topic<input name="title" required maxLength={200} placeholder="For example: Arithmetic sequences"/></label><button className="button primary" disabled={busy}>Add topic</button></form>
+        {data.topics.length>0 ? <div className="stack" style={{gap:8}}><span className="field-label">Topics ({data.topics.length})</span>
+          <div className="chip-row">{data.topics.map(topic=><button className="button small" key={topic.id} aria-pressed={topic.id===topicId} onClick={()=>setTopicId(topic.id)}>{topic.title}</button>)}</div></div>
+          : <div className="empty"><span className="empty-mark">01</span><h3>Add your first topic</h3><p>Topics group the resources students learn from. Add one above, then upload its notes or slides.</p></div>}
+        {data.topics.length>0 && !selected && <p className="muted">Select a topic to add resources and review its processed material.</p>}
         {selected && <section className="stack">
-          <div className="row"><h3>{selected.title}</h3>
-            <button type="button" className="button small" disabled={busy} onClick={()=>{
+          <div className="section-title"><h3>{selected.title}</h3>
+            <button type="button" className="button small danger-quiet" disabled={busy} onClick={()=>{
               if (!confirm(`Delete “${selected.title}” and remove all its resources from this course?`)) return;
               void run(async()=>{await api(base+"/topics/"+selected.id,{method:"DELETE"});setTopicId("");await reload();});
             }}>Delete topic</button>
           </div>
-          <form key={topicId} className="form-grid" onSubmit={e=>{
+          <form key={topicId} className="form-grid form-card" onSubmit={e=>{
             e.preventDefault();const form=e.currentTarget;const upload=new FormData(form);upload.set("topicId",topicId);
             const file=upload.get("file");if(file instanceof File && !file.size)upload.delete("file");
             void run(async()=>{
@@ -318,11 +329,12 @@ export default function TeacherDemo({courseId,onBack}:{courseId:string;onBack:()
               else setError("The file was saved. Add readable text in Review and edit, then process the resource.");
             });
           }}>
-            <label className="field">Resource title<input name="title" required maxLength={200}/></label>
-            <label className="field">PDF (slides, theory sheets, lab sheets), Markdown or text<input name="file" type="file" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain"/></label>
+            <h4 className="field full">Add a resource</h4>
+            <label className="field">Resource title<input name="title" required maxLength={200} placeholder="For example: Lecture notes, week 1"/></label>
+            <label className="field">File · PDF, Markdown or text<input name="file" type="file" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain"/></label>
             <ModePicker name="processingMode"/>
             <MarkdownEditor className="full" label="Or paste resource text" name="text" compact rows={4} maxLength={500000}/>
-            <div><button className="button small primary" disabled={busy}>Save and process resource</button></div>
+            <div className="grid-actions full"><button className="button primary" disabled={busy}>Save and process resource</button></div>
           </form>
           {data.resources.filter(resource=>resource.topicId===topicId).map(resource=><TeacherResourceCard key={resource.id} resource={resource} busy={busy} run={run} reload={reload} processResource={processResource}/>)}
         </section>}

@@ -59,7 +59,7 @@ export function ResourceEditor({ resource, busy, refresh, onPublish, onArchive }
 
   return <article className="resource-card">
     <div className="row">
-      <div><h3>{resource.title}</h3><div className="card-actions">
+      <div><h3>{resource.title}</h3><div className="card-actions tight">
         <span className={`badge ${published ? "green" : "amber"}`}>{resource.status}</span>
         <span className="badge">Version {resource.version || 1}</span>
         {resource.extractionStatus && <span className="badge">Extraction: {resource.extractionStatus}</span>}
@@ -70,7 +70,8 @@ export function ResourceEditor({ resource, busy, refresh, onPublish, onArchive }
       <button className="button small primary" type="button" onClick={() => { setError(""); setEditing(true); }}>Review and edit</button>
       <button className="button small" type="button" onClick={() => void loadVersions()}>Version history</button>
       {!published && <button className="button small success" type="button" disabled={busy || saving || changed || !resource.text?.trim()} onClick={onPublish}>Publish resource</button>}
-      <button className="button small" type="button" disabled={busy || saving} onClick={onArchive}>Delete resource</button>
+      <span className="spacer" />
+      <button className="button small danger-quiet" type="button" disabled={busy || saving} onClick={onArchive}>Delete resource</button>
     </div>
     {changed && !editing && <p className="muted">You have unsaved edits. Reopen the review to save them.</p>}
     {error && !editing && <p className="notice error" role="alert">{error}</p>}

@@ -24,7 +24,7 @@ function TimeControl({label,value,onChange}:{label:string;value:string;onChange:
 
 export default function DemoTimetable({courseId}:{courseId:string}) {
   const path=`/api/courses/${courseId}/timetable`;
-  const [events,setEvents]=useState<Event[]>([]);
+  const [events,setEvents]=useState<Event[]|null>(null);
   const [form,setForm]=useState<Slot>(blank);
   const [editing,setEditing]=useState<string|null>(null);
   const [suggestions,setSuggestions]=useState<Slot[]>([]);
@@ -47,23 +47,25 @@ export default function DemoTimetable({courseId}:{courseId:string}) {
   }
   function set<K extends keyof Slot>(key:K,value:Slot[K]){setForm(old=>({...old,[key]:value}));}
   return <section className="stack">
-    <h3>Weekly timetable</h3>
+    <div className="section-title"><h3>Weekly timetable</h3>{events && <span className="badge">{events.length} class{events.length===1?"":"es"} a week</span>}</div>
     {error && <p className="notice error" role="alert">{error}</p>}
-    <form className="form-grid" onSubmit={save}>
+    <form className="form-grid form-card" onSubmit={save}>
+      <h4 className="field full">{editing?"Edit class":"Add a class"}</h4>
       <label className="field">Class title<input required maxLength={160} value={form.title} onChange={e=>set("title",e.target.value)}/></label>
       <label className="field">Day<select value={form.weekday} onChange={e=>set("weekday",Number(e.target.value))}>{days.map((day,i)=><option value={i+1} key={day}>{day}</option>)}</select></label>
       <TimeControl label="Start time" value={form.startTime} onChange={value=>set("startTime",value)}/>
       <TimeControl label="End time" value={form.endTime} onChange={value=>set("endTime",value)}/>
       <label className="field">First date<input type="date" required value={form.startsOn} onChange={e=>set("startsOn",e.target.value)}/></label>
       <label className="field">Last date<input type="date" required value={form.endsOn} onChange={e=>set("endsOn",e.target.value)}/></label>
-      <label className="field">Timezone<input required value={form.timezone} onChange={e=>set("timezone",e.target.value)}/></label>
-      <div className="card-actions">
+      <label className="field full">Timezone<input required value={form.timezone} onChange={e=>set("timezone",e.target.value)}/></label>
+      <div className="grid-actions full">
         <button className="button small primary" disabled={busy}>{editing?"Save class":"Add class"}</button>
-        {editing && <button className="button small" type="button" onClick={()=>{setForm(blank);setEditing(null);}}>Cancel edit</button>}
-        <button className="button small" type="button" aria-expanded={aiOpen} onClick={()=>setAiOpen(!aiOpen)}>Get AI help</button>
+        {editing && <button className="button small quiet" type="button" onClick={()=>{setForm(blank);setEditing(null);}}>Cancel edit</button>}
+        <span className="spacer"/>
+        <button className="button small" type="button" aria-expanded={aiOpen} onClick={()=>setAiOpen(!aiOpen)}>{aiOpen?"Hide AI help":"Suggest times with AI"}</button>
       </div>
     </form>
-    {aiOpen && <div className="course-card stack">
+    {aiOpen && <div className="form-card stack">
       <MarkdownEditor label="Scheduling instructions" compact maxLength={1400} rows={3} value={instructions} onChange={setInstructions} placeholder="For example, two 50-minute sessions, Tuesday and Thursday after 2:15 PM."/>
       {(!form.startsOn || !form.endsOn) && <p className="muted">Choose the first and last dates above, then ask for suggestions.</p>}
       <div><button className="button small primary" disabled={busy || !instructions.trim() || !form.startsOn || !form.endsOn} onClick={()=>void run(async()=>{
@@ -72,14 +74,15 @@ export default function DemoTimetable({courseId}:{courseId:string}) {
         if(!data.events.length)setError("No suggestions fit those instructions. Try changing the constraints.");
       })}>{busy?"Working…":"Suggest times"}</button></div>
       {suggestions.length>0 && <p className="muted">Review each suggestion. “Use in form” copies it into the form above so you can adjust the day and time before saving.</p>}
-      {suggestions.map((event,i)=><div className="row" key={i}><span>{event.title} · {days[event.weekday-1]} · {event.startTime}–{event.endTime}</span>
+      {suggestions.map((event,i)=><div className="course-card list-card" key={i}><span>{event.title} · {days[event.weekday-1]} · {event.startTime}–{event.endTime}</span>
         <button className="button small" onClick={()=>{setEditing(null);setForm(event);}}>Use in form</button></div>)}
     </div>}
-    {events.length===0 && <p>No classes scheduled.</p>}
-    {events.map(event=><article className="course-card row" key={event.id}>
-      <div><strong>{event.title}</strong><p>{days[event.weekday-1]} · {event.startTime}–{event.endTime} · {event.timezone}</p><p>{event.startsOn} to {event.endsOn}</p></div>
-      <div className="card-actions"><button className="button small" disabled={busy} onClick={()=>{setForm(event);setEditing(event.id);}}>Edit</button>
-        <button className="button small" disabled={busy} onClick={()=>{if(confirm("Remove this class from the timetable?"))void run(async()=>{await api(path+"/"+event.id,{method:"DELETE"});if(editing===event.id){setEditing(null);setForm(blank);}await reload();});}}>Delete</button></div>
+    {events===null && <div className="loading-skeleton"/>}
+    {events?.length===0 && <p className="muted">No classes scheduled yet. Add one above or ask AI to suggest times.</p>}
+    {events?.map(event=><article className="course-card list-card" key={event.id}>
+      <div className="question-head"><span className="question-num">{days[event.weekday-1].slice(0,3)}</span><div><strong>{event.title}</strong><p>{event.startTime}–{event.endTime} · {event.timezone} · {event.startsOn} to {event.endsOn}</p></div></div>
+      <div className="card-actions tight"><button className="button small" disabled={busy} onClick={()=>{setForm(event);setEditing(event.id);window.scrollTo({top:0,behavior:"smooth"});}}>Edit</button>
+        <button className="button small danger-quiet" disabled={busy} onClick={()=>{if(confirm("Remove this class from the timetable?"))void run(async()=>{await api(path+"/"+event.id,{method:"DELETE"});if(editing===event.id){setEditing(null);setForm(blank);}await reload();});}}>Delete</button></div>
     </article>)}
   </section>;
 }

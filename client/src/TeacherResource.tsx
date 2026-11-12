@@ -80,7 +80,8 @@ function QuestionCard({ question, busy, run, reload, onCoding }: { question: Ban
       {question.kind === "text" && !question.answer.trim() && <button type="button" className="button small" disabled={busy}
         onClick={() => void run(async () => { await api(`/api/demo/questions/${question.id}/propose-answer`, { method: "POST" }); await reload(); })}>Propose answer with AI</button>}
       {question.kind === "text" && <button type="button" className="button small" disabled={busy} onClick={onCoding}>Make a coding exercise from this</button>}
-      <button type="button" className="button small" disabled={busy} onClick={() => {
+      <span className="spacer" />
+      <button type="button" className="button small danger-quiet" disabled={busy} onClick={() => {
         if (confirm("Remove this question from the bank?")) void run(async () => { await api(`/api/demo/questions/${question.id}`, { method: "DELETE" }); await reload(); });
       }}>Delete</button>
     </div>}
@@ -174,7 +175,7 @@ function SummaryPanel({ resource, busy, run, reload }: { resource: Material; bus
   useEffect(() => setSummary(resource.summary), [resource.summary]);
   if (resource.processingMode === "questions" && !resource.summary.trim()) return null;
   return <section className="stack summary-panel">
-    <div className="row"><h4>Resource summary {resource.summaryEdited && <span className="badge">Edited by teacher</span>}</h4>
+    <div className="section-title"><div className="question-head"><h4>Resource summary</h4>{resource.summaryEdited && <span className="badge">Edited by teacher</span>}</div>
       {!editing && <button type="button" className="button small" disabled={busy} onClick={() => setEditing(true)}>{resource.summary.trim() ? "Edit summary" : "Write summary"}</button>}</div>
     {editing ? <form className="stack" onSubmit={event => {
       event.preventDefault();
@@ -209,7 +210,7 @@ export function TeacherResourceCard({ resource, busy, run, reload, processResour
       onArchive={() => { if (confirm(`Delete ${resource.title} from this topic?`)) void run(async () => { await api(`/api/resources/${resource.id}/archive`, { method: "POST" }); await reload(); }); }} />
     <div className="card-actions">
       <span className="badge">{resource.processingMode ? modeLabels[resource.processingMode].title : "Processing mode not set"}</span>
-      <span>{Math.min(processed, resource.sectionCount)} of {resource.sectionCount} {unit} processed{pagesDone && resource.pendingSteps ? ` · ${resource.pendingSteps} finishing step${resource.pendingSteps > 1 ? "s" : ""} left` : ""}</span>
+      <span className="meta">{Math.min(processed, resource.sectionCount)} of {resource.sectionCount} {unit} processed{pagesDone && resource.pendingSteps ? ` · ${resource.pendingSteps} finishing step${resource.pendingSteps > 1 ? "s" : ""} left` : ""}</span>
       {resource.processingMode && !complete && <button className="button small primary" disabled={busy} onClick={() => void run(() => processResource(resource.id))}>{processed ? "Continue processing" : "Process with AI"}</button>}
       {resource.processingMode && processed > 0 && <button className="button small" disabled={busy} onClick={() => {
         if (confirm("Process the original upload again from the first page? Questions and summaries you have edited are kept.")) void run(() => processResource(resource.id, true));
@@ -229,7 +230,7 @@ export function TeacherResourceCard({ resource, busy, run, reload, processResour
     {complete && resource.processingMode === "both" && extracted === 0 && resource.questions.some(q => q.origin === "theory") && <p className="notice">The document has no explicit exercises, so EdCurie generated practice questions from its theory. They are labelled “AI-generated from theory”.</p>}
     <SummaryPanel resource={resource} busy={busy} run={run} reload={reload} />
     {(resource.processingMode !== "theory" || resource.questions.length > 0) && <section className="stack">
-      <div className="row"><h4>Question bank ({resource.questions.length})</h4>
+      <div className="section-title"><h4>Question bank ({resource.questions.length})</h4>
         <div className="card-actions tight">
           <button type="button" className="button small" disabled={busy} onClick={() => setAdding(!adding)}>Add question</button>
           <button type="button" className="button small" disabled={busy} onClick={() => setCoding("resource")}>Generate coding exercise</button>

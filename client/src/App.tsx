@@ -45,8 +45,8 @@ function Header({ authenticated = false, institute = null }: { authenticated?: b
   return <header className="topbar">
     <div className="brand-group"><Brand />{institute && <div className="institute-brand">{institute.hasLogo && <img src="/api/institute/logo" alt="" />}<span>{institute.displayName}</span></div>}</div>
     <nav className="nav-actions" aria-label="Main navigation">
-      {authenticated ? <><a className="nav-link" href={routeUrl("/app")}>Workspace</a><LogoutButton /></> :
-        <><a className="nav-link" href="#how-it-works">How it works</a><a className="nav-link" href={routeUrl("/sign-in")}>Sign in</a><a className="button primary small" href={routeUrl("/sign-up")}>Get started</a></>}
+      {authenticated ? <><a className="nav-link nav-optional" href={routeUrl("/app")}>Workspace</a><LogoutButton /></> :
+        <><a className="nav-link nav-optional" href="#how-it-works">How it works</a><a className="nav-link" href={routeUrl("/sign-in")}>Sign in</a><a className="button primary small" href={routeUrl("/sign-up")}>Get started</a></>}
     </nav>
   </header>;
 }
@@ -181,16 +181,16 @@ function TeacherWorkspace() {
     } catch (e) { setError(e instanceof Error ? e.message : "Could not create course."); } finally { setBusy(false); }
   };
   return <div className="workspace-grid">
-    <nav className="side-nav panel" aria-label="Teacher workspace"><button aria-current={selectedId === null ? "page" : undefined} onClick={() => setSelectedId(null)}>My courses</button>{courses?.map((course) => <button key={course.id} aria-current={selectedId === course.id ? "page" : undefined} onClick={() => setSelectedId(course.id)}>{course.title}</button>)}</nav>
+    <nav className="side-nav panel" aria-label="Teacher workspace"><button aria-current={selectedId === null ? "page" : undefined} onClick={() => setSelectedId(null)}>My courses</button>{!!courses?.length && <span className="side-nav-label">Courses</span>}{courses?.map((course) => <button key={course.id} title={course.title} aria-current={selectedId === course.id ? "page" : undefined} onClick={() => setSelectedId(course.id)}>{course.title}</button>)}</nav>
     <Panel className="main-panel">
       {selectedId === null ? <><div className="eyebrow">Teacher workspace</div><h2>Your courses.</h2><p className="muted">Create a course, enroll its students, and publish source material with a baseline assessment.</p>
         {error && <ErrorNotice error={error} retry={() => void refresh()} />}
-        <form className="form-grid" onSubmit={create} style={{ margin: "20px 0 24px" }}>
-          <div className="field"><label htmlFor="course-title">Course title</label><input id="course-title" required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Course title" /></div>
+        <form className="form-grid form-card" onSubmit={create} style={{ margin: "20px 0 24px" }}>
+          <div className="field full"><label htmlFor="course-title">Course title</label><input id="course-title" required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="For example: Discrete Mathematics" /></div>
           <MarkdownEditor className="full" label="Description" compact rows={3} value={description} onChange={setDescription} maxLength={2000} placeholder="What will students learn in this course?" />
-          <div className="field"><button className="button primary" disabled={busy}>Create course</button></div>
+          <div className="grid-actions full"><button className="button primary" disabled={busy}>{busy ? "Creating…" : "Create course"}</button></div>
         </form>
-        {courses === null ? <div className="stack"><div className="loading-skeleton" /><div className="loading-skeleton" /></div> : courses.length ? <div className="stack">{courses.map((course) => <article key={course.id} className="course-card card"><div className="row"><div><h3>{course.title}</h3>{course.description ? <Markdown text={course.description} /> : <p>No description provided.</p>}</div><button className="button small" onClick={() => setSelectedId(course.id)}>Open course</button></div></article>)}</div> : <div className="empty"><span className="empty-mark">EC</span><h3>No courses have been created</h3><p>Create your first course above. It will appear here after the API confirms it.</p></div>}
+        {courses === null ? <div className="stack"><div className="loading-skeleton" /><div className="loading-skeleton" /></div> : courses.length ? <div className="stack"><span className="field-label">Your courses ({courses.length})</span>{courses.map((course) => <article key={course.id} className="course-card list-card"><div><h3>{course.title}</h3>{course.description ? <Markdown text={course.description} /> : <p>No description provided.</p>}</div><button className="button small primary" onClick={() => setSelectedId(course.id)}>Open course</button></article>)}</div> : <div className="empty"><span className="empty-mark">EC</span><h3>No courses have been created</h3><p>Create your first course above. It will appear here after the API confirms it.</p></div>}
       </> : <TeacherDemo key={selectedId} courseId={String(selectedId)} onBack={() => setSelectedId(null)} />}
     </Panel>
   </div>;
@@ -203,13 +203,14 @@ function StudentWorkspace() {
   useEffect(() => { void api<{courses:Course[]}>("/api/courses").then(data=>setCourses(data.courses)).catch(e=>setError(e.message)); },[]);
   return <Panel className="main-panel">
     {selected ? <StudentDemo key={selected.id} courseId={String(selected.id)} onBack={()=>setSelected(null)} /> : <>
+      <div className="eyebrow">Student workspace</div>
       <h2>My courses</h2>
       {error && <ErrorNotice error={error} />}
-      {!courses && !error && <p role="status">Loading courses…</p>}
-      {courses?.length===0 && <p>Your enrolled courses will appear here.</p>}
-      <div className="stack">{courses?.map(course=><article className="course-card row" key={course.id}>
+      {!courses && !error && <div className="stack" role="status" aria-label="Loading courses"><div className="loading-skeleton" /><div className="loading-skeleton" /></div>}
+      {courses?.length===0 && <div className="empty"><span className="empty-mark">EC</span><h3>No courses yet</h3><p>Your enrolled courses will appear here once a teacher adds you.</p></div>}
+      <div className="stack">{courses?.map(course=><article className="course-card list-card" key={course.id}>
         <div><h3>{course.title}</h3>{course.description && <Markdown text={course.description} />}</div>
-        <button className="button small" onClick={()=>setSelected(course)}>Open course</button>
+        <button className="button small primary" onClick={()=>setSelected(course)}>Open course</button>
       </article>)}</div>
     </>}
   </Panel>;
