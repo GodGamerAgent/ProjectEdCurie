@@ -163,13 +163,14 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
     expect((await request(app).put(settingsUrl).set(admin).send(googleSettings)).body).toEqual({...googleSettings,configured:true});
     provider.mockResolvedValueOnce(new Response(JSON.stringify({error:{details:[{reason:"API_KEY_INVALID"}]}}),{status:400}));
     expect((await processPdf()).body.error).toContain("Google rejected the API key");
-    for (const status of [503,500,503]) {
+    for (const status of [503,500]) {
       provider.mockImplementationOnce(async (url,init)=>{
         expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
         expect(JSON.parse(String(init.body)).contents[0].parts[1].inlineData.data).toBe(original.toString("base64"));
         return new Response(null,{status});
       });
     }
+    provider.mockRejectedValueOnce(new DOMException("Provider deadline exceeded","TimeoutError"));
     provider.mockImplementationOnce(async (url,init)=>{
       expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent");
       expect(init.headers).toMatchObject({"x-goog-api-key":"custom-test-key"});
