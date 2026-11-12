@@ -110,6 +110,7 @@ export function materialRoutes(db: Pool) {
   router.get("/api/resources/:id/excerpt",async(req,res)=>{
     const resource=await resourceById(db,String(req.params.id));
     const access=await courseAccess(db,currentUser(res),resource.course_id);
+    if (!access.teacher && (resource.status !== "published" || !resource.text.trim())) throw new HttpError(404, "Resource not found.");
     const versionId=typeof req.query.version==="string"?uuid(req.query.version):null;
     const version=versionId?await db.query("SELECT id,title,text,status FROM resource_versions WHERE id=$1 AND resource_id=$2",[versionId,resource.id]):await db.query("SELECT id,title,text,status FROM resource_versions WHERE resource_id=$1 AND version=$2",[resource.id,resource.version]);
     if(!version.rowCount||(!access.teacher&&(version.rows[0].status!=="published"||!String(version.rows[0].text).trim())))throw new HttpError(404,"Resource source version not found.");

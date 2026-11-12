@@ -28,7 +28,7 @@ type Question = { id: string | number; prompt: string; answer?: string; resource
 type Assessment = { id: string | number; title: string; status: string; questions: Question[] };
 type CourseDetail = { course: Course; resources: Resource[]; assessments: Assessment[]; enrollments: { email: string }[]; concepts: { id: string; name: string; resourceId: string }[] };
 type Preferences = { availability: string; feedback: string; hints: string; formats: string[] };
-type Onboarding = { state: string; message?: string };
+type Onboarding = { state: string; message?: string; hasActiveAssessment?: boolean };
 
 function Panel({ children, className = "", as: Tag = "section" }: { children: ReactNode; className?: string; as?: "section" | "div" }) {
   const pointer = (event: MouseEvent<HTMLElement>) => {
@@ -414,6 +414,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
       const result = await api<{ sessionId:string; questions: { id: string | number; prompt: string }[]; answers:Record<string,string> }>(`/api/courses/${courseId}/assessment/start`, { method: "POST" });
       setQuestions(result.questions);
       setAssessmentSessionId(result.sessionId);
+      setOnboarding((state) => state ? { ...state, hasActiveAssessment: true } : state);
       setAnswers(Object.fromEntries(result.questions.map((question) => [String(question.id), result.answers[String(question.id)] || ""])));
       setSubmitted(false);
     } catch (e) {
@@ -431,6 +432,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
         body: jsonBody({ sessionId:assessmentSessionId, answers: Object.fromEntries(questions.map((question) => [String(question.id), answers[String(question.id)] || ""])) }),
       });
       setSubmitted(true);
+      setOnboarding((state) => state ? { ...state, hasActiveAssessment: false } : state);
       setBaselineResult(result);
       setAssessmentNotice(`Baseline result: ${result.score} out of ${result.total}. Objective answers are matched exactly, ignoring case and extra spaces.`);
     } catch (e) {
@@ -442,6 +444,8 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
   if (!detail) return null;
   const published = detail.resources.filter((resource) => resource.status.toLowerCase() === "published");
   const ready = onboarding?.state.toLowerCase() === "ready";
+  const canResume = Boolean(onboarding?.hasActiveAssessment && !submitted);
+  const canOpenAssessment = ready || canResume;
   return <div>
     <div className="eyebrow">Course · student view</div><h2>{detail.course.title}</h2><p className="muted">{detail.course.description}</p>
     {error && <ErrorNotice error={error} retry={() => void refresh()} />}
@@ -450,9 +454,9 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
         {published.length ? <div className="stack">{published.map((resource) => <article className="resource-card" key={resource.id}><div className="row"><div><h3>{resource.title}</h3><span className="badge green">Published</span></div>{resource.hasFile && <a className="button small" href={`/api/resources/${resource.id}/file`} target="_blank" rel="noreferrer">Open resource</a>}</div>{resource.text && <p style={{ marginTop: 12, whiteSpace: "pre-wrap" }}>{resource.text}</p>}</article>)}</div> :
           <div className="empty"><span className="empty-mark">01</span><h3>No published resources</h3><p>The course has no material available to students yet.</p></div>}
       </div>
-      <aside className="status-card" aria-label="Onboarding status"><div className="eyebrow">Academic onboarding</div><h3>{ready ? "Baseline ready" : "Not ready yet"}</h3>
+      <aside className="status-card" aria-label="Onboarding status"><div className="eyebrow">Academic onboarding</div><h3>{canResume ? "Baseline in progress" : ready ? "Baseline ready" : "Not ready yet"}</h3>
         {onboarding?.message && <p>{onboarding.message}</p>}
-        {onboarding ? <button className={`button ${ready ? "primary" : ""}`} disabled={starting} onClick={ready ? () => void start() : () => void refresh()}>{starting ? "Opening assessment…" : ready ? "Begin baseline assessment" : "Retry readiness check"}</button> :
+        {onboarding ? <button className={`button ${canOpenAssessment ? "primary" : ""}`} disabled={starting || submitting} onClick={canOpenAssessment ? () => void start() : () => void refresh()}>{starting ? "Opening assessment…" : canResume ? "Resume baseline assessment" : ready ? "Begin baseline assessment" : "Retry readiness check"}</button> :
           <button className="button" onClick={() => void refresh()}>Check readiness</button>}
       </aside>
     </div>

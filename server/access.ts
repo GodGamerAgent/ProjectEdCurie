@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { Response } from "express";
 import { HttpError, type AppUser } from "./auth";
 
@@ -41,7 +41,7 @@ export async function teacherCourse(db: Pool, user: AppUser, courseId: string) {
 }
 export const NO_RESOURCE = "Boarding is not possible as your institute haven't added any resource to question you from.";
 export const NO_BASELINE = "Your institute is preparing the baseline assessment";
-export async function eligibility(db: Pool, courseId: string) {
+export async function eligibility(db: Pool | PoolClient, courseId: string) {
   const resource = await db.query("SELECT 1 FROM resources WHERE course_id=$1 AND status='published' AND length(btrim(text))>0 LIMIT 1", [courseId]);
   if (!resource.rowCount) return { state: "no_resource", message: NO_RESOURCE, assessmentId: null };
   const baseline = await db.query(

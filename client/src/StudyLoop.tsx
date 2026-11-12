@@ -236,8 +236,8 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
         <div><strong>{target.name}</strong><p className="muted">{target.reason}</p></div>
         <button className="button small" disabled={busy} onClick={()=>void run(async()=>{
           setSelected(target.conceptId);setLesson(null);setHistory([]);setResult("");setWalkthrough("");
-          const next=await api<{sessionId:string;prompt:string}>(`/api/concepts/${target.conceptId}/practice`,{method:"POST"});
-          setSession(next);setAnswer("");setHints([]);setFocusSet({conceptId:target.conceptId,started:1,total:3});
+          const next=await api<{sessionId:string;prompt:string;hints:string[]}>(`/api/concepts/${target.conceptId}/practice`,{method:"POST"});
+          setSession(next);setAnswer("");setHints(next.hints);setFocusSet({conceptId:target.conceptId,started:1,total:3});
         })}>Start focused practice</button>
       </div>)}
     </div>}
@@ -257,9 +257,11 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       <button className="button primary" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{setLesson(await api(`/api/concepts/${selected}/lesson`,{method:"POST",body:jsonBody({format})}));setLessonFeedback(null);})}>Get lesson</button>
       <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{
         const inSet=focusSet?.conceptId===selected;
-        setSession(await api(`/api/concepts/${selected}/practice`,{method:"POST"}));setAnswer("");setHints([]);setResult("");setWalkthrough("");
+        const next=await api<{sessionId:string;prompt:string;hints:string[]}>(`/api/concepts/${selected}/practice`,{method:"POST"});
+        setSession(next);setAnswer("");setHints(next.hints);setResult("");setWalkthrough("");
+        if(inSet&&next.sessionId===session?.sessionId)return;
         if(inSet&&focusSet.started<focusSet.total)setFocusSet({...focusSet,started:focusSet.started+1});else setFocusSet(null);
-      })}>{result&&focusSet?.conceptId===selected&&focusSet.started<focusSet.total?`Next focus question · ${focusSet.total-focusSet.started} left`:result&&focusSet?.conceptId===selected?"Start another independent question":result?"Next independent problem":focusSet?.conceptId===selected?`Focused set · 1 of ${focusSet.total}`:"Practice question"}</button>
+      })}>{result&&focusSet?.conceptId===selected&&focusSet.started<focusSet.total?`Next focus question · ${focusSet.total-focusSet.started} left`:result&&focusSet?.conceptId===selected?"Start another independent question":result?"Next independent problem":focusSet?.conceptId===selected?`Focused set · ${focusSet.started} of ${focusSet.total}`:"Practice question"}</button>
       <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{const data=await api<{lessons:typeof history}>(`/api/concepts/${selected}/lessons`);setHistory(data.lessons);})}>Previous lessons</button>
     </div>
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>

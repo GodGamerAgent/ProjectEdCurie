@@ -55,24 +55,48 @@ export function courseRoutes(db: Pool) {
     const user = currentUser(res); requireRole(user, "student");
     await courseAccess(db, user, req.params.id);
     const { state, message } = await eligibility(db, req.params.id);
-    res.json({ state, message });
+    const active = await db.query(
+      "SELECT 1 FROM assessment_sessions WHERE user_id=$1 AND course_id=$2 AND status='active'",
+      [user.id, req.params.id]
+    );
+    res.json(active.rowCount ? { state, message, hasActiveAssessment: true } : { state, message });
   });
   router.post("/api/courses/:id/assessment/start", async (req, res) => {
     const user = currentUser(res); requireRole(user, "student");
-    await courseAccess(db, user, req.params.id);
-    const active = await db.query(`SELECT id,questions,answers FROM assessment_sessions WHERE user_id=$1 AND course_id=$2 AND status='active' ORDER BY created_at DESC LIMIT 1`, [user.id, req.params.id]);
-    if (active.rowCount) return res.json({sessionId:active.rows[0].id,questions:active.rows[0].questions.map(({id,prompt}:any)=>({id,prompt})),answers:active.rows[0].answers});
-    const gate = await eligibility(db, req.params.id);
-    if (!gate.assessmentId) throw new HttpError(403, gate.message);
-    const questions = await db.query(`SELECT q.id,q.prompt,q.answer,q.concept_id,q.version,q.resource_version_id FROM questions q JOIN resources r ON r.id=q.resource_id
-      JOIN resource_versions rv ON rv.id=q.resource_version_id AND rv.resource_id=r.id
-      WHERE q.assessment_id=$1 AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0
-      AND rv.status='published' AND length(btrim(rv.text))>0
-      AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0 ORDER BY q.id`, [gate.assessmentId, req.params.id]);
-    if (!questions.rowCount) throw new HttpError(403,gate.message);
-    const session=await db.query(`INSERT INTO assessment_sessions (user_id,course_id,assessment_id,questions)
-      VALUES ($1,$2,$3,$4::jsonb) RETURNING id`,[user.id,req.params.id,gate.assessmentId,JSON.stringify(questions.rows.map((q)=>({id:q.id,prompt:q.prompt,answer:q.answer,conceptId:q.concept_id,questionVersion:q.version,resourceVersionId:q.resource_version_id})))]);
-    res.json({sessionId:session.rows[0].id,questions:questions.rows.map(({id,prompt})=>({id,prompt})),answers:{}});
+    const courseId = req.params.id;
+    await courseAccess(db, user, courseId);
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      // Serialize concurrent starts for the same student and course.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`baseline:${user.id}:${courseId}`]);
+      const active = await client.query(`SELECT id,questions,answers FROM assessment_sessions
+        WHERE user_id=$1 AND course_id=$2 AND status='active'`, [user.id, courseId]);
+      if (active.rowCount) {
+        const { id, questions, answers } = active.rows[0];
+        await client.query("COMMIT");
+        return res.json({ sessionId: id, questions: questions.map(({ id, prompt }: { id: string; prompt: string }) => ({ id, prompt })), answers });
+      }
+      const gate = await eligibility(client, courseId);
+      if (!gate.assessmentId) throw new HttpError(403, gate.message);
+      const questions = await client.query(`SELECT q.id,q.prompt,q.answer,q.concept_id,q.version,q.resource_version_id FROM questions q JOIN resources r ON r.id=q.resource_id
+        JOIN resource_versions rv ON rv.id=q.resource_version_id AND rv.resource_id=r.id
+        WHERE q.assessment_id=$1 AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0
+        AND rv.status='published' AND length(btrim(rv.text))>0
+        AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0 ORDER BY q.id`, [gate.assessmentId, courseId]);
+      if (!questions.rowCount) throw new HttpError(409, "The available baseline questions changed. Check readiness and try again.");
+      const snapshot = questions.rows.map((q) => ({
+        id: q.id, prompt: q.prompt, answer: q.answer, conceptId: q.concept_id,
+        questionVersion: q.version, resourceVersionId: q.resource_version_id
+      }));
+      const session = await client.query(`INSERT INTO assessment_sessions (user_id,course_id,assessment_id,questions)
+        VALUES ($1,$2,$3,$4::jsonb) RETURNING id`, [user.id, courseId, gate.assessmentId, JSON.stringify(snapshot)]);
+      await client.query("COMMIT");
+      res.json({ sessionId: session.rows[0].id, questions: snapshot.map(({ id, prompt }) => ({ id, prompt })), answers: {} });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
   });
   router.put("/api/assessment-sessions/:id/answers", async (req,res)=>{
     const user=currentUser(res);requireRole(user,"student");

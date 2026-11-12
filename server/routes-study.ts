@@ -65,7 +65,7 @@ export async function groqLesson(name: string, excerpts: Excerpt[], preferences:
   let parsed: any;
   try { parsed = JSON.parse(data.choices[0].message.content); }
   catch { throw new HttpError(502, "Groq returned an invalid lesson. Please try again."); }
-  if (typeof parsed.explanation !== "string" || !parsed.explanation.trim() || parsed.explanation.length > 12000 || !Array.isArray(parsed.citations) || !parsed.citations.length ||
+  if (typeof parsed?.explanation !== "string" || !parsed.explanation.trim() || parsed.explanation.length > 12000 || !Array.isArray(parsed.citations) || !parsed.citations.length ||
     parsed.citations.some((c: any) => !c || typeof c.resourceId !== "string" || typeof c.location !== "string" || !excerpts.some((x) => x.resourceId === c.resourceId && x.location === c.location))) {
     throw new HttpError(502, "The lesson lacked valid course citations. Ask your teacher for more usable material or try again.");
   }
@@ -115,7 +115,7 @@ async function groqTutorReply(concept:string,originalExplanation:string,excerpts
     throw new HttpError(503,"Groq could not answer the follow-up. Check the API key and model access, then try again.");
   }
   let parsed:any;try{parsed=JSON.parse(data?.choices?.[0]?.message?.content??"");}catch{throw new HttpError(502,"Groq returned an invalid follow-up.");}
-  if(typeof parsed.answer!=="string"||!parsed.answer.trim()||parsed.answer.length>8000||!Array.isArray(parsed.citations)||
+  if(typeof parsed?.answer!=="string"||!parsed.answer.trim()||parsed.answer.length>8000||!Array.isArray(parsed.citations)||
     parsed.citations.length<1||parsed.citations.length>3||parsed.citations.some((citation:any)=>
       !citation||typeof citation.resourceId!=="string"||typeof citation.location!=="string"||
       !excerpts.some(source=>source.resourceId===citation.resourceId&&source.location===citation.location))){
@@ -244,7 +244,8 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     const result=await db.query(`SELECT tl.id,tl.explanation,tl.citations,tl.requested_format AS format,
       lf.helpful,tl.created_at AS "createdAt" FROM tutor_lessons tl LEFT JOIN lesson_feedback lf ON lf.lesson_id=tl.id
       JOIN resource_versions rv ON rv.id=tl.resource_version_id AND rv.status='published'
-      WHERE tl.user_id=$1 AND tl.concept_id=$2 ORDER BY tl.created_at DESC LIMIT 20`,[user.id,c.id]);
+      JOIN resources r ON r.id=rv.resource_id AND r.course_id=$3 AND r.status='published' AND length(btrim(r.text))>0
+      WHERE tl.user_id=$1 AND tl.concept_id=$2 ORDER BY tl.created_at DESC LIMIT 20`,[user.id,c.id,c.course_id]);
     const lessons=await Promise.all(result.rows.map(async(item)=>{
       const checks=await db.query(`SELECT id,prompt,options,citations,selected_option AS "selectedOption",correct,
         CASE WHEN answered_at IS NULL THEN false ELSE true END AS answered,answered_at AS "answeredAt",
@@ -271,6 +272,8 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     const user=currentUser(res);requireRole(user,"student");const lessonId=uuid(req.params.id);
     if(typeof req.body?.helpful!=="boolean")throw new HttpError(400,"Choose whether this explanation helped.");
     const lesson=(await db.query(`SELECT tl.id,c.course_id FROM tutor_lessons tl JOIN concepts c ON c.id=tl.concept_id
+      JOIN resource_versions rv ON rv.id=tl.resource_version_id AND rv.status='published'
+      JOIN resources r ON r.id=rv.resource_id AND r.course_id=c.course_id AND r.status='published' AND length(btrim(r.text))>0
       WHERE tl.id=$1 AND tl.user_id=$2`,[lessonId,user.id])).rows[0];
     if(!lesson)throw new HttpError(404,"Lesson not found.");
     await courseAccess(db,user,lesson.course_id);
@@ -281,6 +284,8 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   router.get("/api/lessons/:id/messages",async(req,res)=>{
     const user=currentUser(res),lessonId=uuid(req.params.id);requireRole(user,"student");
     const lesson=(await db.query(`SELECT tl.id,c.course_id FROM tutor_lessons tl JOIN concepts c ON c.id=tl.concept_id
+      JOIN resource_versions rv ON rv.id=tl.resource_version_id AND rv.status='published'
+      JOIN resources r ON r.id=rv.resource_id AND r.course_id=c.course_id AND r.status='published' AND length(btrim(r.text))>0
       WHERE tl.id=$1 AND tl.user_id=$2`,[lessonId,user.id])).rows[0];
     if(!lesson)throw new HttpError(404,"Lesson conversation not found.");
     await studentReady(db,user,lesson.course_id);
@@ -351,6 +356,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     if(!Number.isInteger(selected)||selected<0||selected>3)throw new HttpError(400,"Select one of the four answer choices.");
     const ownership=await db.query(`SELECT tl.id,tl.concept_id,c.course_id FROM tutor_lessons tl
       JOIN concepts c ON c.id=tl.concept_id JOIN resource_versions rv ON rv.id=tl.resource_version_id AND rv.status='published'
+      JOIN resources r ON r.id=rv.resource_id AND r.course_id=c.course_id AND r.status='published' AND length(btrim(r.text))>0
       JOIN lesson_checks lc ON lc.lesson_id=tl.id
       WHERE tl.id=$1 AND lc.id=$2 AND tl.user_id=$3`,[lessonId,checkId,user.id]);
     if(!ownership.rowCount)throw new HttpError(404,"Comprehension check not found.");
@@ -381,17 +387,27 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`practice:${user.id}`]);
-    const problem=await client.query(`SELECT p.id,p.prompt FROM practice_problems p JOIN questions q ON q.id=p.question_id JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id
+    const problem=await client.query(`SELECT p.id,p.prompt,p.hints,active.id AS session_id,active.hint_count FROM practice_problems p JOIN questions q ON q.id=p.question_id JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id
       JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id JOIN resource_versions rv ON rv.id=qv.resource_version_id AND rv.resource_id=r.id
+      LEFT JOIN LATERAL (
+        SELECT id,hint_count FROM practice_sessions
+        WHERE problem_id=p.id AND user_id=$3 AND kind='practice' AND submitted=false
+        ORDER BY hint_count DESC,created_at,id LIMIT 1
+      ) active ON true
       WHERE p.concept_id=$1 AND qv.concept_id=$1 AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published'
       AND rv.status='published' AND length(btrim(rv.text))>0
       AND NOT EXISTS (SELECT 1 FROM practice_twin_links pair WHERE pair.twin_problem_id=p.id)
       AND NOT EXISTS (SELECT 1 FROM practice_sessions used WHERE used.problem_id=p.id AND used.user_id=$3 AND used.submitted=true)
-      ORDER BY p.created_at LIMIT 1`,[c.id,c.course_id,user.id]);
+      ORDER BY (active.id IS NULL),p.created_at,p.id LIMIT 1`,[c.id,c.course_id,user.id]);
     if (!problem.rowCount) throw new HttpError(400,"No teacher-approved practice problem is available for this concept yet.");
-    const session=await client.query("INSERT INTO practice_sessions (user_id,problem_id) VALUES ($1,$2) RETURNING id",[user.id,problem.rows[0].id]);
+    const next = problem.rows[0];
+    if (next.session_id) {
+      await client.query("COMMIT");
+      return res.json({ sessionId: next.session_id, prompt: next.prompt, hints: next.hints.slice(0, next.hint_count) });
+    }
+    const session = await client.query("INSERT INTO practice_sessions (user_id,problem_id) VALUES ($1,$2) RETURNING id", [user.id,next.id]);
     await client.query("COMMIT");
-    res.status(201).json({sessionId:session.rows[0].id,prompt:problem.rows[0].prompt});
+    res.status(201).json({ sessionId: session.rows[0].id, prompt: next.prompt, hints: [] });
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });
   router.post("/api/practice/:id/hint", async (req,res)=>{

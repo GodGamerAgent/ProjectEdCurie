@@ -2,9 +2,17 @@
 
 Updated: 2026-11-12
 
-**Current checkpoint:** an isolated end-to-end test now runs teacher publication → student baseline → cited lesson → original problem → linked twin → mastery update. Students can also use private intake, persistent cited follow-ups, lesson format ratings, milestones, and focus-time personalization. Live Groq, browser speech, and NST sign-in remain unverified; no fixtures were added to development or production.
+**Release candidate:** the teacher-to-student study loop is implemented and exercised in the isolated API suite with a test identity resolver and mocked Groq. The Codex integration branch starts from Replit's handoff commit `b2e87357046d5bb9a32deb008ad293925a71adb9`. Signed-in Replit screens and real provider calls still need the owner walkthrough.
 
-**Next unfinished implementation task: adaptive mocks and plan checkpoints.** Extend mocks with difficulty/timing and teacher review; then connect milestone dates and targets to study-plan phases.
+| Status | Evidence |
+|---|---|
+| **Implemented** | Clerk verified-email role resolution, teacher resource and baseline publishing, course enrollment, the student onboarding gate, cited lessons and comprehension checks, progressive hints, linked twins, and assigned-teacher progress. The integration branch fixes concurrent baseline starts, baseline resume after a source is unpublished, practice hint resume, student access to withdrawn sources, and malformed Groq JSON handling. |
+| **Automated-tested** | `npm run build` and `npm run test:isolated` pass locally. The isolated suite applies the checked-in migrations to disposable PostgreSQL and runs 16 tests. Additional local API checks exercised concurrent starts, archived source access and baseline resume, hint restoration, and null Groq payloads. |
+| **Live-verified** | Replit reported its Preview served HTTP 200 and rendered the public landing and sign-in pages at the handoff. |
+| **Blocked on owner live check** | Use real NST teacher/student sessions and the configured Groq key to run the walkthrough below. The isolated resolver and mocked Groq do not exercise those services. |
+| **Deferred** | Mock timing and generated questions, milestone-driven study phases, and other work outside the critical demo. |
+
+No schema changes are required for the integration fixes. The last checked-in migration is `0028_pale_arclight.sql`, which Replit reports is applied in development. Production remains pending. The dependency lock uses public npm URLs with the same package versions and integrity hashes, so local checkouts can run `npm ci`.
 
 **Linked-twin manual walkthrough:** in the assigned teacher's course, create two distinct practice questions for the same concept, then use **Link an independent twin** to pair them. As an enrolled student with a completed baseline, submit the original, choose **Solve linked twin**, and answer without hints. Verify the independent count increases once. With another authorized student or fresh teacher-authored pair, request a hint on the twin and verify only assisted evidence increases. Refresh to verify **Resume linked twin** retains used hints. Use real accounts/material only; fixtures belong exclusively in `npm run test:isolated`.
 
@@ -20,10 +28,11 @@ Use real institute accounts and course material in Preview. Do not create demo r
 4. Add a concept linked to that resource.
 5. Create a baseline assessment. Add at least one question with a prompt, expected answer, the published resource, and the concept; then publish the assessment.
 6. Add two teacher-approved practice problems for the same concept. Link the second as the first problem's independent twin and confirm the link in the teacher list.
-7. Sign in as the enrolled student, open that course, and submit the baseline.
+7. Sign in as the enrolled student and start the baseline. Enter a response and move focus out of the field to save it. Refresh, select **Resume baseline assessment**, confirm the saved response is there, then complete and submit the assessment.
 8. Open the concept and request a lesson. Confirm it includes a citation to the published material; open the cited source excerpt and answer the comprehension check.
 9. Start the original practice problem and submit an answer. Open the linked twin follow-up and answer without requesting a hint.
-10. Confirm the student concept shows a one-time increase in independent attempts/correct evidence and refresh the page to confirm it persists. If testing the assisted path, use a fresh teacher-approved twin and request a hint before answering; only assisted evidence should increase.
+10. Confirm the twin increases independent attempts by one and increases independent correct evidence if the answer was correct. Refresh and check both the student concept and assigned teacher’s progress view. If testing the assisted path, use a fresh teacher-approved twin and request a hint before answering; only assisted evidence should increase.
+11. Confirm the original and twin show different prompts. The **Demonstrated understanding** badge requires at least three distinct independent questions, at least 80% correct on the latest five, and a correct most-recent attempt. Two questions can demonstrate persistence without reaching that badge.
 
 Status meanings: **Implemented** = feature exists in this project; **Partial** = a working slice exists, but the brief requires more; **Not started** = not implemented; **Pending live test** = code/test exists, but real account/provider verification remains outstanding.
 
@@ -51,7 +60,7 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | 18 | Classroom-grounded solutions | Concept-specific published excerpt supplies citations; student can open the authorized source section | Server validates citations and persists resource/question version snapshots for lessons and assessment sessions | **Implemented for this loop / pending live test.** Teacher version-history screens are available. |
 | 19 | Voice | Student can read a lesson aloud and dictate a practice answer through supported browser speech APIs | Dictated text goes through the same authorized answer route; no audio is stored by EdCurie | **Partial / pending browser test.** Availability depends on browser speech support and microphone permission; no streamed tutor conversation. |
 | 20 | Test and assignment diagnosis | Teacher links an assignment to a concept, selects a structured error category, and can mark reviewed work as evidence; students submit text/PDF/plain text, confidence, and reflection | Evidence persists separately and influences future topic prioritization; it never increases distinct independent question mastery; teacher feedback remains hidden until review | **Partial / isolated-tested.** Structured categories and optional verified evidence work. No OCR/scanned PDF extraction, automated grading, or richer diagnosis. |
-| 21 | Targeted micro-practice | Student sees up to five focus topics based on incorrect/absent evidence and can start a teacher-approved problem | Published same-course source and question are required; used and twin-reserved problems are excluded | **Partial.** Single-question sessions only; no generated multi-question set or teacher-reviewed error categories. |
+| 21 | Targeted micro-practice | Student sees up to five focus topics based on incorrect/absent evidence and can start a teacher-approved problem | Published same-course source and question are required; used and twin-reserved problems are excluded | **Partial.** Focused practice offers up to three distinct teacher-approved questions in sequence, saving each submission. Generated questions remain deferred. |
 | 22 | Break reminders | Student can run configurable focus/break timers with in-page end reminders | Timer settings persist in browser storage; completed focus duration is recorded with an idempotency key; no background notification | **Partial.** Timer works only while the workspace stays open; breaks do not count as study time; no push reminders. |
 
 ## Platform and operations
@@ -68,7 +77,7 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | Student availability and commitments | **Partial** | Per-course weekly windows and private one-off absolute-time commitments persist. Availability intervals reject overlap; personal commitments remain private and the planner excludes them from session windows. |
 | Teacher analytics and error categories | **Partial** | Teacher view includes 7/30/90-day activity, concept evidence, structured error categories, assignment outcomes, schedule completion, and per-learner timelines filtered by activity/date window. No custom date range or cohort comparisons. |
 | XP and leaderboard | **Partial** | Idempotent XP awards cover practice, comprehension, reviews, and completed study blocks. Students choose a display name and opt in per course; leaderboard responses never include emails. More award types and anti-gaming limits remain. |
-| Groq setup and reliability | **Partial** | The key has been supplied. Server-only access, bounded excerpt/citation validation, timeout, one transient retry, per-user rate cap and metadata exist. Optional `GROQ_MODEL` defaults to `qwen/qwen3.8-27b`. Live provider behavior is **not verified**; this twin workflow requires no AI calls. |
+| Groq setup and reliability | **Partial** | The key has been supplied. Server-only access, bounded excerpt/citation validation, timeout, one transient retry, per-user rate cap and metadata exist. Optional `GROQ_MODEL` defaults to `qwen/qwen3.8-27b`. Use the administrator AI status to confirm the active model before testing. Live provider behavior is **not verified**; this twin workflow requires no AI calls. |
 | Consistency and authorization | **Partial** | Baseline sessions, practice, twin follow-ups, and comprehension answers persist and guard duplicate submissions; teacher/student scope and publication are checked on server. |
 | Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 16 tests). Coverage includes the full publish→baseline→cited lesson→twin→mastery demo and adaptive mock prioritization/difficulty/teacher review. Groq was mocked, not called live. |
 | Preview / direct development URL | **Passed** | Additive schema changes are applied; workflow starts cleanly; landing and Clerk sign-in pages render; direct URL returns HTTP 200. |
@@ -78,7 +87,7 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 
 1. Add mock timing and generated questions.
 2. Connect dated milestones to study-plan phases and add target-score checks.
-3. Add multi-question targeted practice and prerequisite completion pacing.
+3. Extend the existing focused practice set and prerequisite completion pacing when there is evidence of a gap.
 4. Add more XP award types and anti-gaming limits; background schedule and break reminders.
 5. Extend resource extraction for scanned files, and timetable support for one-off events/sections.
 6. Continue isolated workflow tests and real-account/manual responsive verification; keep development and production free of fixtures.
