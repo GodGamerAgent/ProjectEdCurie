@@ -1,4 +1,4 @@
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 import type { Response } from "express";
 import { HttpError, type AppUser } from "./auth";
 
@@ -7,7 +7,7 @@ export function requireRole(user: AppUser, role: AppUser["role"]) {
   if (user.role !== role) throw new HttpError(403, "You do not have permission for this action.");
 }
 export function cleanString(value: unknown, label: string, max = 500) {
-  if (typeof value !== "string" || !value.trim() || value.trim().length > max) throw new HttpError(400, `${label} is required and must be at most ${max} characters.`);
+  if (typeof value !== "string" || !value.trim() || value.includes("\u0000") || value.trim().length > max) throw new HttpError(400, `${label} is required and must be at most ${max} characters.`);
   return value.trim();
 }
 export function uuid(value: string) {
@@ -41,18 +41,3 @@ export async function teacherCourse(db: Pool, user: AppUser, courseId: string) {
 }
 export const NO_RESOURCE = "Boarding is not possible as your institute haven't added any resource to question you from.";
 export const NO_BASELINE = "Your institute is preparing the baseline assessment";
-export async function eligibility(db: Pool | PoolClient, courseId: string) {
-  const resource = await db.query("SELECT 1 FROM resources WHERE course_id=$1 AND status='published' AND length(btrim(text))>0 LIMIT 1", [courseId]);
-  if (!resource.rowCount) return { state: "no_resource", message: NO_RESOURCE, assessmentId: null };
-  const baseline = await db.query(
-    `SELECT a.id FROM assessments a
-     WHERE a.course_id=$1 AND a.status='published'
-       AND EXISTS (SELECT 1 FROM questions q JOIN resources r ON r.id=q.resource_id
-          JOIN resource_versions rv ON rv.id=q.resource_version_id AND rv.resource_id=r.id
-         WHERE q.assessment_id=a.id AND r.course_id=a.course_id AND r.status='published'
-            AND length(btrim(r.text))>0 AND rv.status='published' AND length(btrim(rv.text))>0
-            AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0)
-     ORDER BY a.created_at LIMIT 1`, [courseId]);
-  if (!baseline.rowCount) return { state: "no_baseline", message: NO_BASELINE, assessmentId: null };
-  return { state: "ready", message: "Your baseline assessment is ready.", assessmentId: baseline.rows[0].id as string };
-}

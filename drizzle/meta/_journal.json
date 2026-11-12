@@ -225,6 +225,13 @@
       "when": 1794476266320,
       "tag": "0031_published_resource_practice",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794479936735,
+      "tag": "0032_demo_workflow",
+      "breakpoints": true
     }
   ]
 }

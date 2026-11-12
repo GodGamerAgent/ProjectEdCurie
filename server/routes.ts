@@ -1,25 +1,16 @@
+import { demoContentRoutes } from "./routes-demo-content";
+import { demoLearningRoutes } from "./routes-demo-learning";
 import express, { type Request } from "express";
 import { clerkClient } from "@clerk/express";
 import type { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { HttpError, authConfigured, type AppUser } from "./auth";
+import { qwen } from "./demo-ai";
 import { currentUser, requireRole } from "./access";
 import { courseRoutes } from "./routes-courses";
 import { materialRoutes } from "./routes-materials";
 import { instituteRoutes } from "./routes-institutes";
-import { studyRoutes } from "./routes-study";
-import { twinRoutes } from "./routes-twins";
 import { planningRoutes } from "./routes-planning";
-import { planRoutes } from "./routes-plans";
-import { reviewRoutes } from "./routes-reviews";
-import { mockRoutes } from "./routes-mocks";
-import { assignmentRoutes } from "./routes-assignments";
-import { analyticsRoutes } from "./routes-analytics";
-import { xpRoutes } from "./routes-xp";
-import { intakeRoutes } from "./routes-intake";
-import { durationRoutes } from "./routes-duration";
-import { questionDraftRoutes } from "./routes-question-drafts";
-import { milestoneRoutes } from "./routes-milestones";
 
 type Resolver = (req: Request) => Promise<AppUser>;
 type InviteSender = (email: string) => Promise<void>;
@@ -44,37 +35,14 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   });
   app.get("/api/admin/ai/status",async(_req,res)=>{
     requireRole(currentUser(res),"admin");
-    res.json({configured:Boolean(process.env.GROQ_API_KEY),model:process.env.GROQ_MODEL?.trim()||"qwen/qwen3.8-27b"});
-  });
-  app.get("/api/preferences", async (_req, res) => {
-    const user = currentUser(res); requireRole(user, "student");
-    const result = await db.query("SELECT availability,feedback,hints,formats FROM student_preferences WHERE user_id=$1", [user.id]);
-    res.json(result.rows[0] ?? { availability: "", feedback: "", hints: "", formats: [] });
-  });
-  app.put("/api/preferences", async (req, res) => {
-    const user = currentUser(res); requireRole(user, "student");
-    const { availability = "", feedback = "", hints = "", formats = [] } = req.body;
-    if ([availability, feedback, hints].some((v) => typeof v !== "string" || v.length > 2000) || !Array.isArray(formats) || formats.length > 10 || formats.some((x) => typeof x !== "string" || x.length > 100)) throw new HttpError(400, "Invalid preferences.");
-    await db.query(`INSERT INTO student_preferences (user_id,availability,feedback,hints,formats) VALUES ($1,$2,$3,$4,$5::jsonb)
-      ON CONFLICT (user_id) DO UPDATE SET availability=$2,feedback=$3,hints=$4,formats=$5::jsonb`, [user.id, availability, feedback, hints, JSON.stringify(formats)]);
-    res.json({ availability, feedback, hints, formats });
+    res.json({configured:Boolean(process.env.GROQ_API_KEY),model:qwen});
   });
   app.use(instituteRoutes(db, inviteSender));
   app.use(courseRoutes(db));
   app.use(materialRoutes(db));
-  app.use(questionDraftRoutes(db));
-  app.use(studyRoutes(db));
-  app.use(twinRoutes(db));
   app.use(planningRoutes(db));
-  app.use(planRoutes(db));
-  app.use(reviewRoutes(db));
-  app.use(mockRoutes(db));
-  app.use(assignmentRoutes(db));
-  app.use(analyticsRoutes(db));
-  app.use(xpRoutes(db));
-  app.use(intakeRoutes(db));
-  app.use(durationRoutes(db));
-  app.use(milestoneRoutes(db));
+  app.use(demoContentRoutes(db));
+  app.use(demoLearningRoutes(db));
   app.use("/api", (_req, res) => res.status(404).json({ error: "Not found." }));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const requestId=String(res.locals.requestId||"unknown");

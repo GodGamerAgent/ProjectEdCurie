@@ -41,11 +41,21 @@ export const courseTeachers = pgTable("course_teachers", {
 }, (table) => [uniqueIndex("course_teachers_unique").on(table.courseId, table.userId)]);
 export const enrollments = pgTable("enrollments", {
   courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
-  email: text("email").notNull()
+  email: text("email").notNull(),
+  name: text("name"),
+  dateOfBirth: date("date_of_birth"),
+  enrolledOn: date("enrolled_on")
 }, (table) => [uniqueIndex("enrollments_unique").on(table.courseId, table.email)]);
+export const demoTopics = pgTable("demo_topics", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  title: text("title").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
 export const resources = pgTable("resources", {
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+  topicId: uuid("topic_id").references(() => demoTopics.id),
   title: text("title").notNull(),
   text: text("text").notNull().default(""),
   status: text("status").notNull().default("draft"),
@@ -479,3 +489,25 @@ export const aiQuestionDrafts = pgTable("ai_question_drafts", {
   acceptedQuestionId: uuid("accepted_question_id").references(() => questions.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
+
+export const demoResourceAnalyses = pgTable("demo_resource_analyses", {
+  resourceId: uuid("resource_id").primaryKey().references(() => resources.id),
+  version: integer("version").notNull(),
+  parts: jsonb("parts").notNull().default([])
+});
+export const demoBaselines = pgTable("demo_baselines", {
+  courseId: uuid("course_id").primaryKey().references(() => courses.id),
+  draft: jsonb("draft").notNull().default([]),
+  published: jsonb("published"),
+  revision: integer("revision").notNull().default(0),
+  draftVersion: integer("draft_version").notNull().default(0)
+});
+export const demoOnboardings = pgTable("demo_onboardings", {
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  revision: integer("revision").notNull(),
+  answers: jsonb("answers").notNull(),
+  score: integer("score").notNull(),
+  total: integer("total").notNull(),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull()
+}, t => [uniqueIndex("demo_onboardings_course_user_revision").on(t.courseId, t.userId, t.revision)]);
