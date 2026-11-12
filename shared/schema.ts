@@ -139,6 +139,16 @@ export const studyDurationEvents = pgTable("study_duration_events",{
   durationSeconds: integer("duration_seconds").notNull(),
   createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
 },table=>[uniqueIndex("study_duration_user_event_unique").on(table.userId,table.eventKey)]);
+export const goalMilestones = pgTable("goal_milestones",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  title: text("title").notNull(),
+  targetDate: date("target_date").notNull(),
+  targetScore: integer("target_score"),
+  completedAt: timestamp("completed_at",{withTimezone:true}),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("goal_milestones_user_course_title_date_unique").on(table.userId,table.courseId,table.title,table.targetDate)]);
 export const baselineSubmissions = pgTable("baseline_submissions", {
   id: uuid("id").defaultRandom().primaryKey(),
   assessmentId: uuid("assessment_id").notNull().references(() => assessments.id),
@@ -195,10 +205,19 @@ export const tutorLessons = pgTable("tutor_lessons", {
   userId: uuid("user_id").notNull().references(() => users.id),
   conceptId: uuid("concept_id").notNull().references(() => concepts.id),
   resourceVersionId: uuid("resource_version_id").references(() => resourceVersions.id),
+  requestedFormat: text("requested_format").notNull().default("direct"),
   explanation: text("explanation").notNull(),
   citations: jsonb("citations").$type<{resourceId:string;title:string;location:string}[]>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
+export const lessonFeedback = pgTable("lesson_feedback",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  lessonId: uuid("lesson_id").notNull().references(()=>tutorLessons.id),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  helpful: boolean("helpful").notNull(),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("lesson_feedback_lesson_unique").on(table.lessonId)]);
 export const lessonChecks = pgTable("lesson_checks", {
   id: uuid("id").defaultRandom().primaryKey(),
   lessonId: uuid("lesson_id").notNull().references(() => tutorLessons.id),

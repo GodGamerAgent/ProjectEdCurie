@@ -176,6 +176,20 @@
       "when": 1794469930865,
       "tag": "0024_plain_newton_destine",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794470110088,
+      "tag": "0025_careless_justice",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794470364990,
+      "tag": "0026_omniscient_hitman",
+      "breakpoints": true
     }
   ]
 }

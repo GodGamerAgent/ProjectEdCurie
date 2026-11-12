@@ -104,6 +104,17 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).post(durationUrl).set(as("student")).send({eventKey,durationSeconds:600})).body).toMatchObject({recorded:true,seconds:600,sessions:1});
     expect((await request(app).post(durationUrl).set(as("student")).send({eventKey,durationSeconds:1200})).body).toMatchObject({recorded:false,seconds:600,sessions:1});
     expect((await request(app).get(durationUrl).set(as("outsider"))).status).toBe(403);
+    const milestoneUrl=`/api/courses/${courseId}/milestones`;
+    expect((await request(app).post(milestoneUrl).set(as("teacher")).send({title:"Unit one",targetDate:"2026-12-20"})).status).toBe(403);
+    expect((await request(app).post(milestoneUrl).set(as("student")).send({title:"Unit one",targetDate:"2026-12-20",targetScore:85})).status).toBe(201);
+    const milestoneList=await request(app).get(milestoneUrl).set(as("student"));
+    expect(milestoneList.body.milestones[0]).toMatchObject({title:"Unit one",targetDate:"2026-12-20",targetScore:85,completedAt:null});
+    const milestoneId=milestoneList.body.milestones[0].id;
+    expect((await request(app).patch(`${milestoneUrl}/${milestoneId}`).set(as("student")).send({completed:true})).body.completedAt).toBeTruthy();
+    expect((await request(app).patch(`${milestoneUrl}/${milestoneId}`).set(as("student")).send({completed:true})).status).toBe(200);
+    expect((await db.query("SELECT count(*) FROM xp_ledger WHERE user_id=$1 AND event_key=$2",[actors.student.id,`milestone:${milestoneId}`])).rows[0].count).toBe("1");
+    expect((await request(app).delete(`${milestoneUrl}/${milestoneId}`).set(as("outsider"))).status).toBe(403);
+    expect((await request(app).delete(`${milestoneUrl}/${milestoneId}`).set(as("student"))).body.deleted).toBe(true);
   });
   it("requires explicit institute assignment for a legacy teacher", async () => {
     await db.query("INSERT INTO users (provider_id,email,role) VALUES ('legacy-teacher','legacy@example.edu','teacher')");
@@ -311,6 +322,7 @@ describe("foundation access and onboarding", () => {
       expect(providerPrompt.learnerContext).toMatchObject({background:"I have studied motion.",confidence:3,targetAssessment:"Physics unit test",goals:"Understand the source explanation.",activeStudyMinutes14d:10});
       expect(lesson.body.checks).toHaveLength(1);expect(lesson.body.checks[0].options).toEqual(["One","Two","Three","Four"]);
       expect(lesson.body.checks[0]).not.toHaveProperty("correctOption");
+      expect((await request(app).post(`/api/lessons/${lesson.body.id}/feedback`).set(as("teacher")).send({helpful:true})).status).toBe(403);
       expect((await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("teacher"))).status).toBe(403);
       const history=await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("student"));
       expect(history.body.lessons).toHaveLength(1);
@@ -332,6 +344,15 @@ describe("foundation access and onboarding", () => {
       const saved=(await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("student"))).body.lessons[0].checks[0];
       expect(saved).toMatchObject({answered:true,selectedOption:checkResult.body.selectedOption,correct:checkResult.body.correct,correctOption:2});
       expect((await db.query("SELECT count(*) FROM study_attempts WHERE kind='comprehension' AND lesson_check_id=$1",[check.id])).rows[0].count).toBe("1");
+      expect((await request(app).post(`/api/lessons/${lesson.body.id}/feedback`).set(as("student")).send({helpful:false})).status).toBe(200);
+      const analogyOne=await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student")).send({format:"analogy"});
+      expect(analogyOne.body.format).toBe("analogy");
+      await request(app).post(`/api/lessons/${analogyOne.body.id}/feedback`).set(as("student")).send({helpful:true});
+      const analogyTwo=await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student")).send({format:"analogy"});
+      await request(app).post(`/api/lessons/${analogyTwo.body.id}/feedback`).set(as("student")).send({helpful:true});
+      expect((await request(app).get(`/api/courses/${id}/format-recommendation`).set(as("student"))).body.recommendation)
+        .toMatchObject({format:"analogy",ratings:2,helpful:2,helpfulPercent:100});
+      expect((await request(app).post(`/api/lessons/${lesson.body.id}/feedback`).set(as("outsider")).send({helpful:true})).status).toBe(404);
       const unsupportedCheck=JSON.stringify({choices:[{message:{content:JSON.stringify({
         explanation:"Unsupported check",citations:[{resourceId:resource.body.id,location:"Page 1"}],
         checks:[{prompt:"Outside text?",options:["A","B","C","D"],correctOption:0,citations:[{resourceId:resource.body.id,location:"Page 99"}]}]

@@ -181,9 +181,9 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       let lessonId:string;
       try{
         await persist.query("BEGIN");
-        const saved=await persist.query(`INSERT INTO tutor_lessons (user_id,concept_id,resource_version_id,explanation,citations)
-          VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING id`,
-        [user.id,c.id,generated.citations[0]?.resourceVersionId??row.resourceVersionId,generated.explanation,JSON.stringify(generated.citations)]);
+        const saved=await persist.query(`INSERT INTO tutor_lessons (user_id,concept_id,resource_version_id,requested_format,explanation,citations)
+          VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING id`,
+        [user.id,c.id,generated.citations[0]?.resourceVersionId??row.resourceVersionId,requestedFormat,generated.explanation,JSON.stringify(generated.citations)]);
         lessonId=saved.rows[0].id;
         for(const check of generated.checks)await persist.query(`INSERT INTO lesson_checks(lesson_id,prompt,options,correct_option,citations)
           VALUES($1,$2,$3::jsonb,$4,$5::jsonb)`,
@@ -193,7 +193,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       const usage=(generated as any).usage ?? {};
       await db.query("UPDATE ai_generations SET status='succeeded',duration_ms=$2,input_tokens=$3,output_tokens=$4 WHERE id=$1",[generationId,elapsed,Number.isInteger(usage.prompt_tokens)?usage.prompt_tokens:null,Number.isInteger(usage.completion_tokens)?usage.completion_tokens:null]);
       const checks=(await db.query(`SELECT id,prompt,options,citations FROM lesson_checks WHERE lesson_id=$1 ORDER BY id`,[lessonId])).rows;
-      res.json({id:lessonId,explanation:generated.explanation,citations:generated.citations,checks,generationId});
+       res.json({id:lessonId,format:requestedFormat,explanation:generated.explanation,citations:generated.citations,checks,generationId});
     }catch(error){
       const elapsed=Math.round(performance.now()-started),status=error instanceof HttpError?String(error.status):"failed";
       await db.query("UPDATE ai_generations SET status='failed',duration_ms=$2,error_category=$3 WHERE id=$1",[generationId,elapsed,status]);
@@ -202,7 +202,8 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   });
   router.get("/api/concepts/:id/lessons", async (req,res)=>{
     const c=await concept(db,req.params.id), user=currentUser(res); await studentReady(db,user,c.course_id);
-    const result=await db.query(`SELECT tl.id,tl.explanation,tl.citations,tl.created_at AS "createdAt" FROM tutor_lessons tl
+    const result=await db.query(`SELECT tl.id,tl.explanation,tl.citations,tl.requested_format AS format,
+      lf.helpful,tl.created_at AS "createdAt" FROM tutor_lessons tl LEFT JOIN lesson_feedback lf ON lf.lesson_id=tl.id
       JOIN resource_versions rv ON rv.id=tl.resource_version_id AND rv.status='published'
       WHERE tl.user_id=$1 AND tl.concept_id=$2 ORDER BY tl.created_at DESC LIMIT 20`,[user.id,c.id]);
     const lessons=await Promise.all(result.rows.map(async(item)=>{
@@ -213,6 +214,30 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       return {...item,checks:checks.rows};
     }));
     res.json({lessons});
+  });
+  router.get("/api/courses/:id/format-recommendation",async(req,res)=>{
+    const user=currentUser(res);requireRole(user,"student");const courseId=uuid(req.params.id);await courseAccess(db,user,courseId);
+    const result=await db.query(`SELECT tl.requested_format AS format,count(*)::int AS ratings,
+      count(*) FILTER(WHERE lf.helpful)::int AS helpful,
+      round(100.0*count(*) FILTER(WHERE lf.helpful)/count(*))::int AS "helpfulPercent"
+      FROM tutor_lessons tl JOIN concepts c ON c.id=tl.concept_id
+      JOIN lesson_feedback lf ON lf.lesson_id=tl.id
+      WHERE tl.user_id=$1 AND c.course_id=$2 GROUP BY tl.requested_format
+      HAVING count(*)>=2 AND count(*) FILTER(WHERE lf.helpful)>0
+      ORDER BY count(*) FILTER(WHERE lf.helpful)::float/count(*) DESC,count(*) DESC LIMIT 1`,
+      [user.id,courseId]);
+    res.json({recommendation:result.rows[0]??null});
+  });
+  router.post("/api/lessons/:id/feedback",async(req,res)=>{
+    const user=currentUser(res);requireRole(user,"student");const lessonId=uuid(req.params.id);
+    if(typeof req.body?.helpful!=="boolean")throw new HttpError(400,"Choose whether this explanation helped.");
+    const lesson=(await db.query(`SELECT tl.id,c.course_id FROM tutor_lessons tl JOIN concepts c ON c.id=tl.concept_id
+      WHERE tl.id=$1 AND tl.user_id=$2`,[lessonId,user.id])).rows[0];
+    if(!lesson)throw new HttpError(404,"Lesson not found.");
+    await courseAccess(db,user,lesson.course_id);
+    await db.query(`INSERT INTO lesson_feedback(lesson_id,user_id,helpful) VALUES($1,$2,$3)
+      ON CONFLICT(lesson_id) DO UPDATE SET helpful=excluded.helpful,updated_at=now()`,[lessonId,user.id,req.body.helpful]);
+    res.json({saved:true});
   });
   router.post("/api/lessons/:id/checks/:checkId/answer",async(req,res)=>{
     const user=currentUser(res);requireRole(user,"student");

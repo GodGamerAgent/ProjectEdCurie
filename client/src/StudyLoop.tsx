@@ -4,12 +4,14 @@ import TwinLinker from "./TwinLinker";
 import { StudentSchedule, TeacherTimetable } from "./Timetable";
 import { TeacherAssignments } from "./AssignmentPanels";
 import TeacherAnalytics from "./TeacherAnalytics";
+import MilestonesPanel from "./MilestonesPanel";
 
 type Concept = { id: string; name: string; resourceId: string; prerequisites?: {id:string;name:string}[] };
 type Resource = { id: string | number; title: string };
 type Assessment = { id: string | number; title: string; questions: { id: string | number; prompt: string; conceptId?: string | null }[] };
 type Evidence = { id?: string; studentId?: string; email?: string; conceptId?: string; name: string; status: string; attempts: number; independent_correct: number; independent_attempts: number; assisted_correct: number; assisted_attempts: number;verified_assignments?:number };
 type LessonCheck = {id:string;prompt:string;options:string[];citations:{resourceId:string;resourceVersionId:string;title?:string;location:string}[];selectedOption?:number|null;correct?:boolean|null;answered?:boolean;answeredAt?:string|null;correctOption?:number|null};
+type FormatRecommendation={format:string;ratings:number;helpful:number;helpfulPercent:number};
 function LessonCheckView({lessonId,check,run}:{lessonId:string;check:LessonCheck;run:(action:()=>Promise<void>)=>void}) {
   const [selected,setSelected]=useState<number|null>(check.selectedOption??null);
   const [result,setResult]=useState<{correct:boolean;correctOption:number;message:string}|null>(
@@ -173,7 +175,8 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   const [selected,setSelected]=useState(""); const [goal,setGoal]=useState("");const [deadline,setDeadline]=useState("");const [availability,setAvailability]=useState("");
   const [goalRefreshKey,setGoalRefreshKey]=useState(0),[plannedPhase,setPlannedPhase]=useState("");
   const [reviewRefreshKey,setReviewRefreshKey]=useState(0);
-  const [lesson,setLesson]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
+   const [lesson,setLesson]=useState<{id:string;format?:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
+  const [lessonFeedback,setLessonFeedback]=useState<boolean|null>(null),[formatRecommendation,setFormatRecommendation]=useState<FormatRecommendation|null>(null);
   const [history,setHistory]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[];checks:LessonCheck[]}[]>([]);
   const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string;kind?:string}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
   const voiceRef=useRef<any>(null);const [dictating,setDictating]=useState(false),[voiceError,setVoiceError]=useState("");
@@ -216,6 +219,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     <form className="form-grid" onSubmit={saveGoal}><div className="field full"><label htmlFor="study-goal">Study goal</label><input id="study-goal" required value={goal} onChange={(e)=>setGoal(e.target.value)}/></div>
       <div className="field"><label htmlFor="study-deadline">Deadline</label><input id="study-deadline" type="date" required value={deadline} onChange={(e)=>setDeadline(e.target.value)}/></div>
       <div className="field"><label htmlFor="study-availability">Availability</label><input id="study-availability" value={availability} onChange={(e)=>setAvailability(e.target.value)}/></div><div className="field"><button className="button" disabled={busy}>Save goal</button></div></form>
+     <MilestonesPanel courseId={courseId}/>
     {baselineReady&&targets.length>0&&<div className="course-card" style={{marginTop:16}} aria-label="Suggested practice topics">
       <strong>Practice a focus topic</strong><p className="muted">Suggestions use your saved answers and only include unused, published teacher questions. They are prompts to practice, not a diagnosis.</p>
       {targets.map(target=><div className="row" key={target.conceptId} style={{marginTop:10}}>
@@ -240,13 +244,17 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     </div>)}
     {concepts.find((x)=>x.id===selected)?.prerequisites?.length?<p className="muted">Prerequisites: {concepts.find((x)=>x.id===selected)?.prerequisites?.map((p)=>p.name).join(", ")}</p>:<p className="muted">No prerequisite relationship is available.</p>}
     <div className="card-actions">
-      <button className="button primary" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{setLesson(await api(`/api/concepts/${selected}/lesson`,{method:"POST",body:jsonBody({format})}));})}>Get lesson</button>
+      <button className="button primary" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{setLesson(await api(`/api/concepts/${selected}/lesson`,{method:"POST",body:jsonBody({format})}));setLessonFeedback(null);})}>Get lesson</button>
       <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{setSession(await api(`/api/concepts/${selected}/practice`,{method:"POST"}));setAnswer("");setHints([]);setResult("");setWalkthrough("");})}>{result?"Next independent problem":"Practice question"}</button>
       <button className="button" disabled={busy||!baselineReady} title={!baselineReady?"Complete the baseline first.":undefined} onClick={()=>void run(async()=>{const data=await api<{lessons:typeof history}>(`/api/concepts/${selected}/lessons`);setHistory(data.lessons);})}>Previous lessons</button>
     </div>
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>
     {!baselineReady&&<p className="muted">Complete the course baseline to unlock lessons and practice. Your goal and availability can be saved now.</p>}
-     {lesson && <div style={{marginTop:16}}><button className="button small" type="button" onClick={speakLesson}>Read lesson aloud</button>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}<p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
+     {lesson && <div style={{marginTop:16}}><button className="button small" type="button" onClick={speakLesson}>Read lesson aloud</button>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}<p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p>
+       <div className="course-card"><strong>Was this {lesson.format||"requested"} explanation helpful?</strong><div className="card-actions"><button className="button small" type="button" disabled={busy} aria-pressed={lessonFeedback===true} onClick={()=>void run(async()=>{await api(`/api/lessons/${lesson.id}/feedback`,{method:"POST",body:jsonBody({helpful:true})});setLessonFeedback(true);setFormatRecommendation((await api<{recommendation:FormatRecommendation|null}>(`/api/courses/${courseId}/format-recommendation`)).recommendation);})}>Helpful</button><button className="button small" type="button" disabled={busy} aria-pressed={lessonFeedback===false} onClick={()=>void run(async()=>{await api(`/api/lessons/${lesson.id}/feedback`,{method:"POST",body:jsonBody({helpful:false})});setLessonFeedback(false);setFormatRecommendation((await api<{recommendation:FormatRecommendation|null}>(`/api/courses/${courseId}/format-recommendation`)).recommendation);})}>Not helpful</button></div>
+         {lessonFeedback!==null&&<p className="muted" role="status">Feedback saved.</p>}
+         {formatRecommendation&&<p className="muted">Your feedback suggests trying <strong>{formatRecommendation.format.replaceAll("_"," ")}</strong> next ({formatRecommendation.helpful}/{formatRecommendation.ratings} helpful ratings).</p>}
+       </div><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
       {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p></div>}
       <div aria-label="Lesson comprehension checks">{lesson.checks.map(check=><LessonCheckView key={check.id} lessonId={lesson.id} check={check} run={run}/>)}</div></div>}
     {history.map((item)=><div key={item.id} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span>
