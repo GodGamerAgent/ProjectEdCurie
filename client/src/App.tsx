@@ -7,6 +7,7 @@ import AdminWorkspace from "./AdminWorkspace";
 import SignupFieldHints from "./SignupFieldHints";
 import { StudentStudy, TeacherStudy } from "./StudyLoop";
 import { StudentAssignments } from "./AssignmentPanels";
+import RewardsPanel from "./RewardsPanel";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -473,6 +474,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
     </section>}
     {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentStudy key={String(courseId)} courseId={courseId} baselineReady={Boolean(ready&&baselineResult)} />}
     {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentAssignments courseId={courseId}/>}
+    {onboarding?.state.toLowerCase() !== "unenrolled" && <RewardsPanel courseId={courseId}/>}
   </div>;
 }
 

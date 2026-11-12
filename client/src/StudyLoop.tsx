@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, jsonBody } from "./api";
 import TwinLinker from "./TwinLinker";
 import { StudentSchedule, TeacherTimetable } from "./Timetable";
@@ -85,6 +85,37 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
     </div>}
   </section>;
 }
+function BreakTimer() {
+  const [focusMinutes,setFocusMinutes]=useState(()=>Number(localStorage.getItem("edcurie-focus-minutes")||25));
+  const [breakMinutes,setBreakMinutes]=useState(()=>Number(localStorage.getItem("edcurie-break-minutes")||5));
+  const [mode,setMode]=useState<"focus"|"break"|null>(null),[running,setRunning]=useState(false);
+  const [seconds,setSeconds]=useState(focusMinutes*60),[message,setMessage]=useState("");
+  useEffect(()=>{
+    if(!running)return;
+    const timer=window.setInterval(()=>setSeconds(left=>Math.max(0,left-1)),1000);
+    return()=>window.clearInterval(timer);
+  },[running]);
+  useEffect(()=>{
+    if(!running||seconds!==0||!mode)return;
+    setRunning(false);
+    if(mode==="focus"){setMode("break");setSeconds(breakMinutes*60);setMessage("Focus block finished. Take a short break before your next session.");}
+    else{setMode(null);setSeconds(focusMinutes*60);setMessage("Break finished. You can start another focus session when ready.");}
+  },[running,seconds,mode,breakMinutes,focusMinutes]);
+  const clock=`${String(Math.floor(seconds/60)).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`;
+  function setFocus(value:number){setFocusMinutes(value);localStorage.setItem("edcurie-focus-minutes",String(value));if(!mode)setSeconds(value*60);}
+  function setBreak(value:number){setBreakMinutes(value);localStorage.setItem("edcurie-break-minutes",String(value));if(mode==="break"&&!running)setSeconds(value*60);}
+  return <section className="study-section"><div className="divider"/><div className="eyebrow">Wellbeing</div><h3>Focus and break reminder</h3>
+    <p className="muted">Choose a focus block and break length. EdCurie will remind you here when each block ends.</p>
+    <div className="form-grid"><div className="field"><label htmlFor="focus-minutes">Focus minutes</label><select id="focus-minutes" disabled={Boolean(mode)} value={focusMinutes} onChange={e=>setFocus(Number(e.target.value))}>{[15,25,35,45,60].map(n=><option key={n} value={n}>{n} minutes</option>)}</select></div>
+      <div className="field"><label htmlFor="break-minutes">Break minutes</label><select id="break-minutes" disabled={Boolean(mode)} value={breakMinutes} onChange={e=>setBreak(Number(e.target.value))}>{[3,5,10,15].map(n=><option key={n} value={n}>{n} minutes</option>)}</select></div></div>
+    <div className="course-card row" style={{marginTop:12}}><div><strong aria-live="polite">{mode==="focus"?"Focus":mode==="break"?"Break":"Ready"} · {clock}</strong>{message&&<p role="status">{message}</p>}</div>
+      {!mode?<button className="button primary small" onClick={()=>{setMessage("");setMode("focus");setSeconds(focusMinutes*60);setRunning(true);}}>Start focus block</button>
+        :mode==="focus"?<div className="card-actions"><button className="button small" onClick={()=>setRunning(!running)}>{running?"Pause":"Resume"}</button><button className="button small" onClick={()=>{setRunning(false);setMode(null);setSeconds(focusMinutes*60);}}>End focus</button></div>
+        :!running?<div className="card-actions"><button className="button primary small" onClick={()=>{setMessage("");setRunning(true);}}>Start break</button><button className="button small" onClick={()=>{setMode(null);setSeconds(focusMinutes*60);setMessage("");}}>Skip break</button></div>
+        :<button className="button small" onClick={()=>{setRunning(false);setMode(null);setSeconds(focusMinutes*60);}}>End break</button>}
+    </div>
+  </section>;
+}
 
 export function TeacherStudy({ courseId, resources, assessments, concepts, refresh }: { courseId: string | number; resources: Resource[]; assessments: Assessment[]; concepts: Concept[]; refresh: () => Promise<void> }) {
   const [name,setName]=useState(""); const [resourceId,setResourceId]=useState("");
@@ -136,6 +167,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   const [lesson,setLesson]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
   const [history,setHistory]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[];checks:LessonCheck[]}[]>([]);
   const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string;kind?:string}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
+  const voiceRef=useRef<any>(null);const [dictating,setDictating]=useState(false),[voiceError,setVoiceError]=useState("");
   const [followups,setFollowups]=useState<{originalSessionId:string;originalPrompt:string;conceptId:string;status:string}[]>([]);
   const [result,setResult]=useState("");const [walkthrough,setWalkthrough]=useState("");const [error,setError]=useState("");const [notice,setNotice]=useState("");const [busy,setBusy]=useState(false);
   const [format,setFormat]=useState("direct");const [source,setSource]=useState<{resourceId:string;location:string;text:string}|null>(null);
@@ -151,6 +183,22 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     }
   },[courseId,baselineReady]);
   useEffect(()=>{void refresh().catch((e)=>setError(e.message));},[refresh]);
+  useEffect(()=>()=>{voiceRef.current?.stop?.();},[]);
+  function dictateAnswer(){
+    setVoiceError("");
+    if(voiceRef.current){voiceRef.current.stop();voiceRef.current=null;setDictating(false);return;}
+    const voice=window as any,Recognition=voice.SpeechRecognition||voice.webkitSpeechRecognition;
+    if(!Recognition){setVoiceError("Voice input is not supported in this browser. You can type your answer instead.");return;}
+    const recognition=new Recognition();recognition.lang=navigator.language;recognition.maxAlternatives=1;recognition.interimResults=false;
+    recognition.onresult=(event:any)=>{const transcript=event.results?.[0]?.[0]?.transcript;if(transcript)setAnswer((old)=>old?`${old} ${transcript}`:transcript);};
+    recognition.onerror=()=>setVoiceError("Voice input stopped. Check microphone permission or type your answer.");
+    recognition.onend=()=>{voiceRef.current=null;setDictating(false);};
+    voiceRef.current=recognition;setDictating(true);recognition.start();
+  }
+  function speakLesson(){
+    if(!("speechSynthesis" in window)){setVoiceError("Read-aloud is not supported in this browser.");return;}
+    window.speechSynthesis.cancel();window.speechSynthesis.speak(new SpeechSynthesisUtterance(lesson?.explanation||""));
+  }
   async function run(action:()=>Promise<void>){setBusy(true);setError("");setNotice("");try{await action();}catch(e){setError(e instanceof Error?e.message:"The action could not be completed.");}finally{setBusy(false);}}
   function saveGoal(e:FormEvent){e.preventDefault();void run(async()=>{await api(`/api/courses/${courseId}/goal`,{method:"PUT",body:jsonBody({goal,deadline,availability})});setNotice("Study goal saved.");setGoalRefreshKey(x=>x+1);});}
   function openPlannedConcept(conceptId:string,phase:string){setSelected(conceptId);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);setPlannedPhase(phase);}
@@ -189,7 +237,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     </div>
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>
     {!baselineReady&&<p className="muted">Complete the course baseline to unlock lessons and practice. Your goal and availability can be saved now.</p>}
-    {lesson && <div style={{marginTop:16}}><p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
+     {lesson && <div style={{marginTop:16}}><button className="button small" type="button" onClick={speakLesson}>Read lesson aloud</button>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}<p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
       {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p></div>}
       <div aria-label="Lesson comprehension checks">{lesson.checks.map(check=><LessonCheckView key={check.id} lessonId={lesson.id} check={check} run={run}/>)}</div></div>}
     {history.map((item)=><div key={item.id} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span>
@@ -199,12 +247,15 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       {hints.map((hint,i)=><p key={i}><strong>Hint {i+1}:</strong> {hint}</p>)}
       {!session.concept && <button className="button small" disabled={busy||hints.length>=3} onClick={()=>void run(async()=>{const r=await api<{hint:string}>(`/api/practice/${session.sessionId}/hint`,{method:"POST"});setHints((old)=>[...old,r.hint]);})}>Get next hint</button>}
       <form onSubmit={(e)=>{e.preventDefault();void run(async()=>{const r=await api<{message:string;walkthrough:string|null;diagnostic:{sessionId:string;prompt:string;concept:string}|null}>(`/api/practice/${session.sessionId}/answer`,{method:"POST",body:jsonBody({answer})});setResult(r.message);setWalkthrough(r.walkthrough||"");setAnswer("");setHints([]);setSession(r.diagnostic);setReviewRefreshKey(x=>x+1);await refresh();});}} style={{marginTop:12}}>
-        <div className="field"><label htmlFor="practice-answer">Your answer</label><input id="practice-answer" required value={answer} onChange={(e)=>setAnswer(e.target.value)}/></div><button className="button primary small" disabled={busy} style={{marginTop:10}}>Submit answer</button></form></div>}
+        <div className="field"><label htmlFor="practice-answer">Your answer</label><input id="practice-answer" required value={answer} onChange={(e)=>setAnswer(e.target.value)}/></div>
+        <div className="card-actions"><button className="button small" type="button" onClick={dictateAnswer}>{dictating?"Stop dictation":"Dictate answer"}</button><button className="button primary small" disabled={busy}>Submit answer</button></div>
+        <p className="muted">Voice dictation uses your browser's speech recognition. Review the transcript before submitting.</p>{voiceError&&<p className="notice error" role="alert">{voiceError}</p>}</form></div>}
       {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><p>{walkthrough}</p><p>Try the next independent problem when you are ready.</p></div>}
     {result && <div className="notice" role="status" style={{marginTop:16}}>{result}</div>}
     </div>}
     <StudentSchedule courseId={courseId} baselineReady={baselineReady} refreshKey={goalRefreshKey} onStartBlock={openPlannedConcept}/>
     <ReviewVault courseId={courseId} baselineReady={baselineReady} refreshKey={reviewRefreshKey}/>
     <AdaptiveMock courseId={courseId} baselineReady={baselineReady}/>
+    <BreakTimer/>
   </section>;
 }

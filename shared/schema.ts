@@ -351,6 +351,10 @@ export const assignmentSubmissions = pgTable("assignment_submissions",{
   response: text("response").notNull(),
   diagnosis: text("diagnosis").notNull().default(""),
   confidence: integer("confidence").notNull(),
+  fileName: text("file_name"),
+  mimeType: text("mime_type"),
+  fileData: bytes("file_data"),
+  extractionStatus: text("extraction_status").notNull().default("manual"),
   status: text("status").notNull().default("submitted"),
   score: integer("score"),
   rubricScores: jsonb("rubric_scores").$type<number[]>(),
@@ -360,6 +364,22 @@ export const assignmentSubmissions = pgTable("assignment_submissions",{
   submittedAt: timestamp("submitted_at",{withTimezone:true}).defaultNow().notNull(),
   reviewedAt: timestamp("reviewed_at",{withTimezone:true})
 },table=>[uniqueIndex("assignment_submission_one_per_student").on(table.assignmentId,table.userId)]);
+export const xpLedger = pgTable("xp_ledger",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  eventKey: text("event_key").notNull(),
+  points: integer("points").notNull(),
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("xp_ledger_user_event_unique").on(table.userId,table.eventKey)]);
+export const leaderboardPreferences = pgTable("leaderboard_preferences",{
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  optIn: boolean("opt_in").notNull().default(false),
+  displayName: text("display_name").notNull(),
+  updatedAt: timestamp("updated_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("leaderboard_preferences_user_course_unique").on(table.userId,table.courseId)]);
 export const aiGenerations = pgTable("ai_generations", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id),

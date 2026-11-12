@@ -371,6 +371,8 @@ describe("foundation access and onboarding", () => {
     const results=await Promise.all([1,2].map(()=>request(app).post(`/api/practice/${fresh.sessionId}/answer`).set(as("student")).send({answer:"7"})));
     expect(results[0].body).toEqual(results[1].body);
     expect(results[0].body).toMatchObject({kind:"twin",correct:true,assisted:false});
+    const xpEvents=(await db.query("SELECT count(*) FROM xp_ledger WHERE user_id=$1 AND course_id=$2",[actors.student.id,course.id])).rows[0].count;
+    expect(Number(xpEvents)).toBeGreaterThan(0);
     const after=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts[0];
     expect(after.independent_correct-before.independent_correct).toBe(1);
     expect(after.status).toBe("Developing");
@@ -486,12 +488,21 @@ describe("foundation access and onboarding", () => {
     const visible=(await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments[0];
     expect(visible).toMatchObject({title:"Explain the result",submissionId:null});
     const baselineBefore=(await db.query("SELECT count(*) FROM study_attempts WHERE user_id=$1 AND course_id=$2 AND kind='practice'",[actors.student.id,course.id])).rows[0].count;
-    const submission=await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student")).send({response:"The response",diagnosis:"I was unsure about the units.",confidence:2});
+    expect((await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student"))
+      .attach("file",Buffer.from([0,1,2,3]),{filename:"bad.bin",contentType:"application/octet-stream"}).field("confidence","2")).status).toBe(400);
+    const submission=await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student"))
+      .field("response","The response").field("diagnosis","I was unsure about the units.").field("confidence","2")
+      .attach("file",Buffer.from("An attached answer based on the course notes."),{filename:"answer.txt",contentType:"text/plain"});
     expect(submission.status).toBe(201);
+    expect(submission.body).toMatchObject({fileName:"answer.txt",extractionStatus:"complete"});
     const pending=(await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments[0];
     expect(pending).toMatchObject({submissionStatus:"submitted",score:null,teacherFeedback:null});
     const teacherRows=await request(app).get(`/api/assignments/${created.body.id}/submissions`).set(as("teacher"));
-    expect(teacherRows.body.submissions[0]).toMatchObject({email:actors.student.email,diagnosis:"I was unsure about the units.",confidence:2});
+    expect(teacherRows.body.submissions[0]).toMatchObject({email:actors.student.email,diagnosis:"I was unsure about the units.",confidence:2,fileName:"answer.txt",extractionStatus:"complete"});
+    const fileUrl=`/api/assignment-submissions/${submission.body.id}/file`;
+    expect((await request(app).get(fileUrl).set(as("student"))).status).toBe(200);
+    expect((await request(app).get(fileUrl).set(as("outsider"))).status).toBe(404);
+    expect((await request(app).get(fileUrl).set(as("teacher"))).status).toBe(200);
     expect((await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("otherTeacher")).send({score:80,feedback:"Reviewed",rubricScores:[3]})).status).toBe(403);
     expect((await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("teacher")).send({score:80,feedback:"Reviewed",rubricScores:[5]})).status).toBe(400);
     const reviewed=await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("teacher")).send({
@@ -508,6 +519,14 @@ describe("foundation access and onboarding", () => {
     expect(analytics.body.activity).toHaveLength(7);
     expect((await request(app).get(`/api/courses/${course.id}/analytics`).set(as("otherTeacher"))).status).toBe(403);
     expect((await request(app).get(`/api/courses/${course.id}/analytics?days=3`).set(as("teacher"))).status).toBe(400);
+    expect((await request(app).get(`/api/courses/${course.id}/rewards`).set(as("student"))).body).toMatchObject({points:0,optIn:false,leaderboard:[]});
+    expect((await request(app).put(`/api/courses/${course.id}/leaderboard-preference`).set(as("student")).send({optIn:true,displayName:"Student Star"})).status).toBe(200);
+    const optedIn=await request(app).get(`/api/courses/${course.id}/rewards`).set(as("student"));
+    expect(optedIn.body.leaderboard).toMatchObject([{name:"Student Star",you:true}]);
+    expect(JSON.stringify(optedIn.body.leaderboard)).not.toContain("@");
+    expect((await request(app).get(`/api/courses/${course.id}/rewards`).set(as("teacher"))).status).toBe(403);
+    await request(app).put(`/api/courses/${course.id}/leaderboard-preference`).set(as("student")).send({optIn:false,displayName:"Student Star"});
+    expect((await request(app).get(`/api/courses/${course.id}/rewards`).set(as("student"))).body.leaderboard).toEqual([]);
   });
   it("keeps weekly timetable, student availability, and personal commitments correctly scoped", async()=>{
     const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated timetable"})).body;

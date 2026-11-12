@@ -4,6 +4,7 @@ import { DefaultScheduler, Rating } from "ts-fsrs";
 import { HttpError } from "./auth";
 import { cleanString, currentUser, requireRole, uuid } from "./access";
 import { studentReady } from "./routes-study";
+import { awardXp } from "./xp";
 
 const normalize=(value:string)=>value.trim().replace(/\s+/g," ").toLocaleLowerCase("en-US");
 let schedulerPromise:ReturnType<typeof DefaultScheduler>|undefined;
@@ -80,6 +81,7 @@ export function reviewRoutes(db:Pool) {
       await client.query(`INSERT INTO review_events(session_id,card_id,user_id,rating,correct,previous_due_at,next_due_at,review_log)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
         [sessionId,cardRow.id,user.id,grade,correct,cardRow.due_at,dueAt,JSON.stringify(next.revlog)]);
+      await awardXp(client,user.id,owner.courseId,`review:${sessionId}`,correct?5:2,correct?"Review recalled":"Review attempted");
       await client.query("COMMIT");res.json(result);
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });

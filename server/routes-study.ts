@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { HttpError } from "./auth";
 import { cleanString, courseAccess, currentUser, eligibility, requireRole, teacherCourse, uuid } from "./access";
 import { DefaultScheduler, Rating } from "ts-fsrs";
+import { awardXp } from "./xp";
 
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
 let fsrsScheduler:Awaited<ReturnType<typeof DefaultScheduler>>|undefined;
@@ -234,6 +235,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       const answer=await client.query("UPDATE lesson_checks SET selected_option=$2,correct=$3,answered_at=now() WHERE id=$1 RETURNING answered_at",[checkId,selected,correct]);
       await client.query(`INSERT INTO study_attempts(user_id,course_id,concept_id,lesson_check_id,kind,correct,assisted)
         VALUES($1,$2,$3,$4,'comprehension',$5,true)`,[user.id,ownership.rows[0].course_id,ownership.rows[0].concept_id,checkId,correct]);
+      await awardXp(client,user.id,ownership.rows[0].course_id,`comprehension:${checkId}`,correct?2:1,correct?"Comprehension check completed":"Comprehension check attempted");
       await client.query("COMMIT");
       res.json({selectedOption:selected,correct,correctOption:check.correct_option,answeredAt:answer.rows[0].answered_at,
         message:correct?"Correct. This check is recorded as assisted comprehension evidence.":"Not quite. Review the explanation and cited course material."});
@@ -293,6 +295,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       }
       const assisted=updated.rows[0].hint_count>0;
       await client.query("INSERT INTO study_attempts (user_id,course_id,concept_id,session_id,problem_id,kind,correct,assisted) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",[user.id,s.course_id,s.concept_id,s.id,s.problem_id,s.kind,correct,assisted]);
+      await awardXp(client,user.id,s.course_id,`practice:${s.id}`,correct?10:5,correct?"Practice answered correctly":"Practice attempt completed");
       if(["practice","twin"].includes(s.kind)){
         const f=await scheduler(),now=new Date(),grade=!correct?Rating.Again:assisted?Rating.Hard:Rating.Good;
         const scheduled=f.review({card:f.newCard({now}) as any,grade,now});

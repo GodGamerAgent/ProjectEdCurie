@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { HttpError } from "./auth";
 import { currentUser, uuid } from "./access";
 import { studentReady } from "./routes-study";
+import { awardXp } from "./xp";
 
 type Window={weekday:number;startTime:string;endTime:string};
 type Candidate={id:string;name:string;learning_minutes:number;practice_minutes:number;revision_minutes:number;difficulty:number;errors:number;prerequisites:string[]};
@@ -232,6 +233,7 @@ export function planRoutes(db:Pool) {
     if(row.state==="completed")return res.json({completed:true});
     if(row.state!=="started")throw new HttpError(409,"Start the study session before completing it.");
     await db.query("UPDATE study_blocks SET state='completed',completed_at=now() WHERE id=$1 AND user_id=$2 AND state='started'",[id,user.id]);
+    await awardXp(db,user.id,row.courseId,`study-block:${id}`,5,"Study session completed");
     res.json({completed:true});
   });
   return router;

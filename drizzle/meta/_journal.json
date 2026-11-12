@@ -141,6 +141,20 @@
       "when": 1794467411676,
       "tag": "0019_perpetual_the_fallen",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794468210431,
+      "tag": "0020_wakeful_stellaris",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794468496922,
+      "tag": "0021_lumpy_the_renegades",
+      "breakpoints": true
     }
   ]
 }
