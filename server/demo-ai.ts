@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { setTimeout as delay } from "node:timers/promises";
 import { HttpError } from "./auth";
 import { aiMarkdown } from "./ai-markdown";
 
@@ -6,10 +7,17 @@ const groqBase = "https://api.groq.com/openai/v1";
 const googleBase = "https://generativelanguage.googleapis.com/v1beta";
 const googleCompatibleBase = googleBase + "/openai";
 const googlePdfModel = "gemini-3.8-flash";
+const googlePdfFallbackModel = "gemini-3.5-flash-lite";
 type Image = { mime: string; bytes: Buffer };
 type PDF = { filename: string; bytes: Buffer };
 export const qwen = "qwen/qwen3.8-27b";
 type AISettings = { baseUrl: string; model: string; pdfMode: "vision" | "file" };
+
+class ProviderUnavailable extends HttpError {
+  constructor(status: number) {
+    super(503, `The AI provider is temporarily unavailable (HTTP ${status}). Try again shortly.`);
+  }
+}
 
 function parseBase(value: unknown) {
   if (typeof value !== "string" || value.length>500) throw new HttpError(400,"Enter an HTTPS API base URL.");
@@ -53,17 +61,31 @@ export async function saveAISettings(db: Pool, value: unknown) {
 }
 async function providerRequest(base: string, apiKey: string | undefined, path: string, body: BodyInit, json = false, nativeGoogle = false) {
   if (!apiKey) throw new HttpError(503, base===groqBase ? "Add GROQ_API_KEY in Replit Secrets to use AI." : "Set the matching AI_PROVIDER_BASE_URL and AI_PROVIDER_API_KEY in Replit Secrets.");
+  const signal = AbortSignal.timeout(60000);
+  const retryable = (status: number) => [500, 502, 503, 504].includes(status);
+  const send = () => fetch(base + path, {
+    method: "POST", body, signal, redirect: "error",
+    headers: {
+      ...(nativeGoogle ? {"x-goog-api-key": apiKey} : {Authorization: `Bearer ${apiKey}`}),
+      ...(json ? {"Content-Type":"application/json"} : {}),
+    },
+  });
   let response: Response;
   try {
-    response = await fetch(base + path, {
-      method: "POST", body, signal: AbortSignal.timeout(60000), redirect: "error",
-      headers: {
-        ...(nativeGoogle ? {"x-goog-api-key": apiKey} : {Authorization: `Bearer ${apiKey}`}),
-        ...(json ? {"Content-Type":"application/json"} : {}),
-      },
-    });
+    response = await send();
+    if (json) {
+      for (const backoff of [750, 1500]) {
+        if (!retryable(response.status)) break;
+        await response.body?.cancel();
+        await delay(backoff, undefined, {signal});
+        response = await send();
+      }
+    }
   } catch {
     throw new HttpError(503, "The AI provider did not respond. Please try again.");
+  }
+  if (retryable(response.status)) {
+    throw new ProviderUnavailable(response.status);
   }
   if (response.status === 429) throw new HttpError(429, "The AI provider's rate or quota limit was reached. Check the provider dashboard before retrying.");
   if (response.status === 401 || response.status === 403) {
@@ -123,6 +145,22 @@ export async function demoAI(db: Pool, instructions: string, data: unknown, imag
   }),true);
   try { return JSON.parse(body.choices[0].message.content) as unknown; }
   catch { throw new HttpError(502, "The AI provider returned invalid JSON. Try again or use page images for a long PDF."); }
+}
+
+export async function analyzePdf(
+  db: Pool, instructions: string, data: unknown, settings: AISettings,
+  attachment: {image: Image} | {pdf: PDF},
+) {
+  const image = "image" in attachment ? attachment.image : undefined;
+  const pdf = "pdf" in attachment ? attachment.pdf : undefined;
+  try {
+    return await demoAI(db,instructions,data,image,pdf,settings);
+  } catch (error) {
+    if (!(error instanceof ProviderUnavailable) || settings.baseUrl !== googleCompatibleBase || settings.model === googlePdfFallbackModel) {
+      throw error;
+    }
+    return demoAI(db,instructions,data,image,pdf,{...settings,model:googlePdfFallbackModel});
+  }
 }
 export async function transcribe(file: Express.Multer.File) {
   const extensions: Record<string,string> = {

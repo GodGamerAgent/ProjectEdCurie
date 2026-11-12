@@ -163,8 +163,15 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
     expect((await request(app).put(settingsUrl).set(admin).send(googleSettings)).body).toEqual({...googleSettings,configured:true});
     provider.mockResolvedValueOnce(new Response(JSON.stringify({error:{details:[{reason:"API_KEY_INVALID"}]}}),{status:400}));
     expect((await processPdf()).body.error).toContain("Google rejected the API key");
+    for (const status of [503,500,503]) {
+      provider.mockImplementationOnce(async (url,init)=>{
+        expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
+        expect(JSON.parse(String(init.body)).contents[0].parts[1].inlineData.data).toBe(original.toString("base64"));
+        return new Response(null,{status});
+      });
+    }
     provider.mockImplementationOnce(async (url,init)=>{
-      expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
+      expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent");
       expect(init.headers).toMatchObject({"x-goog-api-key":"custom-test-key"});
       const body=JSON.parse(String(init.body));
       expect(body.generationConfig.responseMimeType).toBe("application/json");
@@ -190,7 +197,7 @@ it("runs the teacher-to-student demo, scoped by course and baseline revision", a
     const savedSettings=await request(app).put(settingsUrl).set(admin).send(settings);
     expect(savedSettings.body).toEqual({...settings,configured:true});
     expect((await request(app).post(`/api/demo/resources/${resourceId}/process`).set(teacher)).body.remaining).toBe(0);
-    expect(provider).toHaveBeenCalledTimes(5);
+    expect(provider).toHaveBeenCalledTimes(8);
     expect((await request(app).put(settingsUrl).set(admin).send({baseUrl:"https://api.groq.com/openai/v1",model:"qwen/qwen3.8-27b",pdfMode:"vision"})).status).toBe(200);
     const versions=(await request(app).get(`/api/resources/${resourceId}/versions`).set(teacher)).body.versions;
     const versionUrl=`/api/resources/${resourceId}/versions/${versions[0].id}`;

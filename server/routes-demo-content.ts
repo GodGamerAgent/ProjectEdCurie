@@ -3,7 +3,7 @@ import { Router } from "express";
 import type { Pool } from "pg";
 import { cleanString, currentUser, normalizeEmail, teacherCourse, uuid } from "./access";
 import { HttpError } from "./auth";
-import { aiText, demoAI, object, readAISettings } from "./demo-ai";
+import { aiText, analyzePdf, demoAI, object, readAISettings } from "./demo-ai";
 
 function dateField(value: unknown, label: string) {
   const date = cleanString(value,label,10);
@@ -139,8 +139,8 @@ export function demoContentRoutes(db: Pool) {
       const page=parts.length+1;
       const prompt="Review the actual PDF content visually. Read every heading, paragraph, example, diagram, table, equation, and code block. Return JSON {pages:[{page,summary,problems:[{prompt,answer,quote}]}]} with one entry for every page supplied, in order. Use the actual PDF page numbers (1-based). Summarize every topic and subtopic taught on each page, including definitions, methods, formulas, examples, and conclusions. For a blank or title-only page, say so. Extract only exercises, lab tasks, or worked questions that actually appear. Preserve numbering, every subpart, constraints, variables, equations, inputs and outputs, and code. Put the verbatim printed statement in quote and use Markdown and LaTeX in prompt. Leave answer empty unless the document explicitly gives the answer. Never invent or solve a problem. If a question continues on another page, keep the visible portion and mark the continuation in prompt. Use an empty problems array on pages without questions.";
       const result=object(mode==="pdf-file"
-        ? await demoAI(db,prompt,{title:source.title,totalPages:total,expectedPages:`1 through ${total}`},undefined,{filename:source.file_name||"resource.pdf",bytes},settings)
-        : await demoAI(db,prompt,{title:source.title,totalPages:total,expectedPages:[page]},await pdfPageImage(bytes,page),undefined,settings));
+        ? await analyzePdf(db,prompt,{title:source.title,totalPages:total,expectedPages:`1 through ${total}`},settings,{pdf:{filename:source.file_name||"resource.pdf",bytes}})
+        : await analyzePdf(db,prompt,{title:source.title,totalPages:total,expectedPages:[page]},settings,{image:await pdfPageImage(bytes,page)}));
       const expected=mode==="pdf-file"?Array.from({length:total},(_,i)=>i+1):[page];
       if (!Array.isArray(result.pages) || result.pages.length!==expected.length) throw new HttpError(502,"The AI response omitted pages. Retry, or use Page images for long PDFs.");
       newParts=result.pages.map((value,i)=>{
