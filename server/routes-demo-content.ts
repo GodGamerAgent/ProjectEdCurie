@@ -137,14 +137,15 @@ export function demoContentRoutes(db: Pool) {
       if (!Buffer.isBuffer(bytes)) throw new HttpError(409,"The PDF changed or its original file is unavailable.");
       total=source.pdf_pages ?? await pdfPageCount(bytes);
       const page=parts.length+1;
-      const prompt="Review the actual PDF content visually. Read every heading, paragraph, example, diagram, table, equation, and code block. Return JSON {pages:[{page,summary,problems:[{prompt,answer,quote}]}]} with one entry for every page supplied, in order. Use the actual PDF page numbers (1-based). Summarize every topic and subtopic taught on each page, including definitions, methods, formulas, examples, and conclusions. For a blank or title-only page, say so. Extract only exercises, lab tasks, or worked questions that actually appear. Preserve numbering, every subpart, constraints, variables, equations, inputs and outputs, and code. Put the verbatim printed statement in quote and use Markdown and LaTeX in prompt. Leave answer empty unless the document explicitly gives the answer. Never invent or solve a problem. If a question continues on another page, keep the visible portion and mark the continuation in prompt. Use an empty problems array on pages without questions.";
+      const prompt="Review the actual PDF content visually. Read every heading, paragraph, example, diagram, table, equation, and code block on the requested pages. Return JSON {pages:[{page,summary,problems:[{prompt,answer,quote}]}]} with one entry for each page listed in expectedPages, in order. When the entire PDF is attached but only one page is requested, use the other pages for context and return only the requested page. Use the actual PDF page numbers (1-based). Summarize every topic and subtopic taught on each requested page, including definitions, methods, formulas, examples, and conclusions. For a blank or title-only page, say so. Extract only exercises, lab tasks, or worked questions that actually appear. Preserve numbering, every subpart, constraints, variables, equations, inputs and outputs, and code. Put the verbatim printed statement in quote and use Markdown and LaTeX in prompt. Leave answer empty unless the document explicitly gives the answer. Never invent or solve a problem. If a question continues on another page, keep the visible portion and mark the continuation in prompt. Use an empty problems array on pages without questions.";
       const pdf={filename:source.file_name||"resource.pdf",bytes};
       const data={title:source.title,totalPages:total};
       const wholeFileInput={...data,expectedPages:`1 through ${total}`};
+      const singlePageInput={...data,expectedPages:[page]};
+      const original={wholeFileInput,singlePageInput,pdf,firstPage:page===1};
       const analysis=mode==="pdf-file"
-        ? await analyzePdf(db,prompt,wholeFileInput,settings,{pdf})
-        : await analyzePdf(db,prompt,{...data,expectedPages:[page]},settings,{image:await pdfPageImage(bytes,page)},
-          page===1 ? {data:wholeFileInput,pdf} : undefined);
+        ? await analyzePdf(db,prompt,page===1?wholeFileInput:singlePageInput,settings,{pdf},original)
+        : await analyzePdf(db,prompt,singlePageInput,settings,{image:await pdfPageImage(bytes,page)},original);
       const result=object(analysis.result);
       const expected=analysis.wholeFile?Array.from({length:total},(_,i)=>i+1):[page];
       if (!Array.isArray(result.pages) || result.pages.length!==expected.length) throw new HttpError(502,"The AI response omitted pages. Retry, or use Page images for long PDFs.");

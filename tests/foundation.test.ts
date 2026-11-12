@@ -74,7 +74,11 @@ beforeAll(async () => {
 });
 afterAll(async () => { await db.end(); });
 
-it("uses the original PDF after Google page-image processing times out", async () => {
+it.each([
+  {pdfMode:"vision",malformed:false},
+  {pdfMode:"vision",malformed:true},
+  {pdfMode:"file",malformed:true},
+])("recovers Google PDF processing in $pdfMode mode with malformed=$malformed", async ({pdfMode,malformed}) => {
   const teacher=as("teacher");
   const course=await request(app).post("/api/courses").set(teacher).send({title:"PDF recovery"});
   expect(course.status).toBe(201);
@@ -94,18 +98,26 @@ it("uses the original PDF after Google page-image processing times out", async (
     problems:index===0 ? [{prompt:"Find the first five terms of $c_n = n^2 - 1$.",answer:"",quote:"Find the first five terms."}] : [],
   }));
   const provider=vi.fn<(url:string,init:RequestInit)=>Promise<Response>>();
-  provider.mockImplementationOnce(async (url,init)=>{
-    expect(url).toContain("/models/gemma-4-31b-it:generateContent");
-    const parts=JSON.parse(String(init.body)).contents[0].parts;
-    expect(JSON.parse(parts[0].text).expectedPages).toEqual([1]);
-    expect(parts[1].inlineData).toMatchObject({mimeType:"image/png",data:expect.stringMatching(/^iVBOR/)});
-    throw new DOMException("Provider deadline exceeded","TimeoutError");
-  }).mockImplementationOnce(async (url,init)=>{
+  const googleResponse=(text:string)=>Response.json({candidates:[{content:{parts:[{text}]}}]});
+  provider.mockImplementation(async (url,init)=>{
+    const body=JSON.parse(String(init.body));
+    const parts=body.contents[0].parts;
+    const requested=JSON.parse(parts[0].text).expectedPages;
+    if (url.includes("/models/gemma-4-31b-it:generateContent")) {
+      expect(requested).toEqual([expect.any(Number)]);
+      expect(parts[1].inlineData).toMatchObject({mimeType:"image/png",data:expect.stringMatching(/^iVBOR/)});
+      if (requested[0]===1) throw new DOMException("Provider deadline exceeded","TimeoutError");
+      return googleResponse("Incomplete result");
+    }
     expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
-    const parts=JSON.parse(String(init.body)).contents[0].parts;
-    expect(JSON.parse(parts[0].text).expectedPages).toBe(`1 through ${pdfPages}`);
+    expect(body.generationConfig.responseJsonSchema.required).toEqual(["pages"]);
     expect(parts[1].inlineData).toEqual({mimeType:"application/pdf",data:original.toString("base64")});
-    return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({pages})}]}}]});
+    if (typeof requested==="string") {
+      expect(requested).toBe(`1 through ${pdfPages}`);
+      return googleResponse(malformed ? '{"pages":[' : JSON.stringify({pages}));
+    }
+    expect(requested).toEqual([expect.any(Number)]);
+    return googleResponse(JSON.stringify({pages:[pages[requested[0]-1]]}));
   });
   const baseUrl="https://generativelanguage.googleapis.com/v1beta/openai";
   vi.stubEnv("AI_PROVIDER_BASE_URL",baseUrl);
@@ -113,18 +125,21 @@ it("uses the original PDF after Google page-image processing times out", async (
   vi.stubGlobal("fetch",provider);
   try {
     const settings=await request(app).put("/api/admin/ai/status").set(as("admin"))
-      .send({baseUrl,model:"gemma-4-31b-it",pdfMode:"vision"});
+      .send({baseUrl,model:pdfMode==="vision"?"gemma-4-31b-it":"gemini-3.5-flash-lite",pdfMode});
     expect(settings.status).toBe(200);
     const processPdf=()=>request(app).post(`/api/demo/resources/${id}/process`).set(teacher);
-    const result=await processPdf();
-    expect(result.body).toEqual({remaining:0});
+    for (let page=1;page<=(malformed?pdfPages:1);page++) {
+      const result=await processPdf();
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual({remaining:malformed?pdfPages-page:0});
+    }
     const view=await request(app).get(base+"/teacher").set(teacher);
     const resource=view.body.resources.find((item:{id:string})=>item.id===id);
     expect(resource.parts).toEqual(pages);
     expect(resource.text).toContain(`## Page ${pdfPages}`);
     expect(resource.text).toContain(pages[0].problems[0].prompt);
     expect((await processPdf()).body).toEqual({remaining:0});
-    expect(provider).toHaveBeenCalledTimes(2);
+    expect(provider).toHaveBeenCalledTimes(malformed ? (pdfMode==="vision"?2*pdfPages+1:pdfPages+1) : 2);
   } finally {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
