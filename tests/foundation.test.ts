@@ -42,11 +42,13 @@ function samplePdf() {
 }
 
 beforeAll(async () => {
-  const empty = await db.query("SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM courses) AS courses");
-  expect(empty.rows[0]).toEqual({ users: "0", courses: "0" });
+  const empty = await db.query("SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM courses) AS courses, (SELECT count(*) FROM approved_domains) AS domains");
+  expect(empty.rows[0]).toEqual({ users: "0", courses: "0", domains: "0" });
   await expect(provisionVerifiedIdentity(db, "admin", "admin@example.edu", false, "admin@example.edu")).rejects.toThrow("verified institutional email");
+  await expect(provisionVerifiedIdentity(db, "wrong", "wrong@example.edu", true, "admin@example.edu")).rejects.toThrow("domain has not been approved");
   actors.admin = await provisionVerifiedIdentity(db, "admin", "admin@example.edu", true, "admin@example.edu");
   expect(actors.admin.role).toBe("admin");
+  expect((await db.query("SELECT count(*) FROM approved_domains")).rows[0].count).toBe("0");
   await expect(provisionVerifiedIdentity(db, "blocked", "blocked@example.edu", true, "admin@example.edu")).rejects.toThrow("domain has not been approved");
   for (const [name, email, role] of [
     ["teacher", "teacher@example.edu", "teacher"],

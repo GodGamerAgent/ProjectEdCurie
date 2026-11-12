@@ -1,0 +1,1 @@
+- [Direct URL and Vite WebSocket](vite-port-routing.md) — a 426 before the app loads can mean port 80 points at Vite's WebSocket.
