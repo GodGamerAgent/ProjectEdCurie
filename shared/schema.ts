@@ -162,19 +162,9 @@ export const practiceSessions = pgTable("practice_sessions", {
   problemId: uuid("problem_id").notNull().references(() => practiceProblems.id),
   kind: text("kind").notNull().default("practice"),
   hintCount: integer("hint_count").notNull().default(0),
+  diagnosticDepth: integer("diagnostic_depth").notNull().default(0),
   submitted: boolean("submitted").notNull().default(false),
   result: jsonb("result"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
-});
-export const studyAttempts = pgTable("study_attempts", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").notNull().references(() => users.id),
-  courseId: uuid("course_id").notNull().references(() => courses.id),
-  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
-  sessionId: uuid("session_id").references(() => practiceSessions.id),
-  kind: text("kind").notNull(),
-  correct: boolean("correct").notNull(),
-  assisted: boolean("assisted").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 export const tutorLessons = pgTable("tutor_lessons", {
@@ -186,6 +176,29 @@ export const tutorLessons = pgTable("tutor_lessons", {
   citations: jsonb("citations").$type<{resourceId:string;title:string;location:string}[]>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
+export const lessonChecks = pgTable("lesson_checks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  lessonId: uuid("lesson_id").notNull().references(() => tutorLessons.id),
+  prompt: text("prompt").notNull(),
+  options: jsonb("options").$type<string[]>().notNull(),
+  correctOption: integer("correct_option").notNull(),
+  citations: jsonb("citations").$type<{resourceId:string;resourceVersionId:string;location:string}[]>().notNull(),
+  selectedOption: integer("selected_option"),
+  correct: boolean("correct"),
+  answeredAt: timestamp("answered_at",{withTimezone:true})
+});
+export const studyAttempts = pgTable("study_attempts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  sessionId: uuid("session_id").references(() => practiceSessions.id),
+  lessonCheckId: uuid("lesson_check_id").references(() => lessonChecks.id),
+  kind: text("kind").notNull(),
+  correct: boolean("correct").notNull(),
+  assisted: boolean("assisted").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+}, table => [uniqueIndex("study_attempts_lesson_check_unique").on(table.lessonCheckId)]);
 export const practiceTwinLinks = pgTable("practice_twin_links", {
   originalProblemId: uuid("original_problem_id").primaryKey().references(() => practiceProblems.id),
   twinProblemId: uuid("twin_problem_id").notNull().unique().references(() => practiceProblems.id),
@@ -195,6 +208,46 @@ export const practiceTwinLinks = pgTable("practice_twin_links", {
 export const practiceTwinSessions = pgTable("practice_twin_sessions", {
   originalSessionId: uuid("original_session_id").primaryKey().references(() => practiceSessions.id),
   twinSessionId: uuid("twin_session_id").notNull().unique().references(() => practiceSessions.id)
+});
+export const practiceDiagnosticSessions = pgTable("practice_diagnostic_sessions", {
+  diagnosticSessionId: uuid("diagnostic_session_id").primaryKey().references(() => practiceSessions.id),
+  parentSessionId: uuid("parent_session_id").notNull().unique().references(() => practiceSessions.id)
+});
+export const classTimetableEvents = pgTable("class_timetable_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  teacherId: uuid("teacher_id").notNull().references(() => users.id),
+  title: text("title").notNull(),
+  weekday: integer("weekday").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  startsOn: text("starts_on").notNull(),
+  endsOn: text("ends_on").notNull(),
+  timezone: text("timezone").notNull(),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+});
+export const classTimetableExceptions = pgTable("class_timetable_exceptions", {
+  eventId: uuid("event_id").notNull().references(() => classTimetableEvents.id),
+  exceptionDate: text("exception_date").notNull(),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("class_timetable_exception_unique").on(table.eventId,table.exceptionDate)]);
+export const studentAvailability = pgTable("student_availability", {
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  timezone: text("timezone").notNull(),
+  intervals: jsonb("intervals").$type<{weekday:number;startTime:string;endTime:string}[]>().notNull().default([])
+},table=>[uniqueIndex("student_availability_user_course_unique").on(table.userId,table.courseId)]);
+export const studentCommitments = pgTable("student_commitments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").references(() => courses.id),
+  title: text("title").notNull(),
+  startsAt: timestamp("starts_at",{withTimezone:true}).notNull(),
+  endsAt: timestamp("ends_at",{withTimezone:true}).notNull(),
+  timezone: text("timezone").notNull(),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
 });
 export const aiGenerations = pgTable("ai_generations", {
   id: uuid("id").defaultRandom().primaryKey(),

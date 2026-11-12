@@ -1,11 +1,33 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, jsonBody } from "./api";
 import TwinLinker from "./TwinLinker";
+import { StudentSchedule, TeacherTimetable } from "./Timetable";
 
 type Concept = { id: string; name: string; resourceId: string; prerequisites?: {id:string;name:string}[] };
 type Resource = { id: string | number; title: string };
 type Assessment = { id: string | number; title: string; questions: { id: string | number; prompt: string; conceptId?: string | null }[] };
 type Evidence = { id?: string; studentId?: string; email?: string; conceptId?: string; name: string; status: string; attempts: number; independent_correct: number; independent_attempts: number; assisted_correct: number; assisted_attempts: number };
+type LessonCheck = {id:string;prompt:string;options:string[];citations:{resourceId:string;resourceVersionId:string;title?:string;location:string}[];selectedOption?:number|null;correct?:boolean|null;answered?:boolean;answeredAt?:string|null;correctOption?:number|null};
+function LessonCheckView({lessonId,check,run}:{lessonId:string;check:LessonCheck;run:(action:()=>Promise<void>)=>void}) {
+  const [selected,setSelected]=useState<number|null>(check.selectedOption??null);
+  const [result,setResult]=useState<{correct:boolean;correctOption:number;message:string}|null>(
+    check.answered&&check.correct!==null&&check.correctOption!==null?{correct:check.correct!,correctOption:check.correctOption!,message:check.correct?"Correct. This check is recorded as assisted comprehension evidence.":"Not quite. Review the explanation and cited course material."}:null);
+  return <div className="course-card" style={{marginTop:12}}><strong>Check your understanding</strong><p>{check.prompt}</p>
+    {check.citations.map((cite,index)=><p key={index} className="muted">Source: {cite.title||"Course material"} · {cite.location}</p>)}
+    <fieldset disabled={Boolean(result)} style={{border:0,padding:0,margin:0}}>
+      <legend className="sr-only">Choose an answer</legend>
+      {check.options.map((option,index)=><label key={index} className="row" style={{justifyContent:"flex-start",gap:10,margin:"8px 0"}}>
+        <input type="radio" name={`check-${check.id}`} checked={selected===index} onChange={()=>setSelected(index)}/><span>{option}</span>
+      </label>)}
+    </fieldset>
+    {!result?<button className="button small" type="button" disabled={selected===null} onClick={()=>run(async()=>{
+      const response=await api<{correct:boolean;correctOption:number;message:string}>(`/api/lessons/${lessonId}/checks/${check.id}/answer`,{method:"POST",body:jsonBody({selectedOption:selected})});
+      setResult(response);
+    })}>Submit check</button>:<div className="notice" role="status" style={{marginTop:10}}>
+      <p>{result.message}</p><p>Answer: {check.options[result.correctOption]}</p>
+    </div>}
+  </div>;
+}
 
 export function TeacherStudy({ courseId, resources, assessments, concepts, refresh }: { courseId: string | number; resources: Resource[]; assessments: Assessment[]; concepts: Concept[]; refresh: () => Promise<void> }) {
   const [name,setName]=useState(""); const [resourceId,setResourceId]=useState("");
@@ -40,6 +62,7 @@ export function TeacherStudy({ courseId, resources, assessments, concepts, refre
       </form></>}
     </>}
     <TwinLinker courseId={courseId} revision={assessments}/>
+    <TeacherTimetable courseId={courseId}/>
     <div className="divider"/><div className="row"><h3>Student progress</h3><button className="button small" type="button" onClick={()=>void loadProgress().catch((e)=>setError(e.message))}>Refresh progress</button></div>
     {progress.length ? <div className="stack">{progress.map((p)=><div className="course-card" key={`${p.studentId}-${p.conceptId}`}><strong>{p.email} · {p.name}</strong><p>{p.status} · Independent {p.independent_correct}/{p.independent_attempts} · Assisted {p.assisted_correct}/{p.assisted_attempts}</p></div>)}</div> : <p className="muted">Progress appears once students and concepts are available.</p>}
   </section>;
@@ -47,9 +70,10 @@ export function TeacherStudy({ courseId, resources, assessments, concepts, refre
 
 export function StudentStudy({courseId,baselineReady}:{courseId:string|number;baselineReady:boolean}) {
   const [concepts,setConcepts]=useState<Concept[]>([]); const [evidence,setEvidence]=useState<Evidence[]>([]);
+  const [targets,setTargets]=useState<{conceptId:string;name:string;reason:string}[]>([]);
   const [selected,setSelected]=useState(""); const [goal,setGoal]=useState("");const [deadline,setDeadline]=useState("");const [availability,setAvailability]=useState("");
-  const [lesson,setLesson]=useState<{explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[]}|null>(null);
-  const [history,setHistory]=useState<{explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[]}[]>([]);
+  const [lesson,setLesson]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
+  const [history,setHistory]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[];checks:LessonCheck[]}[]>([]);
   const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string;kind?:string}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
   const [followups,setFollowups]=useState<{originalSessionId:string;originalPrompt:string;conceptId:string;status:string}[]>([]);
   const [result,setResult]=useState("");const [walkthrough,setWalkthrough]=useState("");const [error,setError]=useState("");const [notice,setNotice]=useState("");const [busy,setBusy]=useState(false);
@@ -57,7 +81,13 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   const refresh=useCallback(async()=>{
     const [c,m,g]=await Promise.all([api<{concepts:Concept[]}>(`/api/courses/${courseId}/concepts`),api<{concepts:Evidence[]}>(`/api/courses/${courseId}/mastery`),api<{goal:{goal:string;deadline:string;availability:string}|null}>(`/api/courses/${courseId}/goal`)]);
     setConcepts(c.concepts);setEvidence(m.concepts);if(g.goal){setGoal(g.goal.goal);setDeadline(g.goal.deadline);setAvailability(g.goal.availability);}
-    if(baselineReady){const twins=await api<{followups:typeof followups}>(`/api/courses/${courseId}/twin-followups`);setFollowups(twins.followups);}
+    if(baselineReady){
+      const [twins,focused]=await Promise.all([
+        api<{followups:typeof followups}>(`/api/courses/${courseId}/twin-followups`),
+        api<{targets:typeof targets}>(`/api/courses/${courseId}/targeted-practice`)
+      ]);
+      setFollowups(twins.followups);setTargets(focused.targets);
+    }
   },[courseId,baselineReady]);
   useEffect(()=>{void refresh().catch((e)=>setError(e.message));},[refresh]);
   async function run(action:()=>Promise<void>){setBusy(true);setError("");setNotice("");try{await action();}catch(e){setError(e instanceof Error?e.message:"The action could not be completed.");}finally{setBusy(false);}}
@@ -67,6 +97,17 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     <form className="form-grid" onSubmit={saveGoal}><div className="field full"><label htmlFor="study-goal">Study goal</label><input id="study-goal" required value={goal} onChange={(e)=>setGoal(e.target.value)}/></div>
       <div className="field"><label htmlFor="study-deadline">Deadline</label><input id="study-deadline" type="date" required value={deadline} onChange={(e)=>setDeadline(e.target.value)}/></div>
       <div className="field"><label htmlFor="study-availability">Availability</label><input id="study-availability" value={availability} onChange={(e)=>setAvailability(e.target.value)}/></div><div className="field"><button className="button" disabled={busy}>Save goal</button></div></form>
+    {baselineReady&&targets.length>0&&<div className="course-card" style={{marginTop:16}} aria-label="Suggested practice topics">
+      <strong>Practice a focus topic</strong><p className="muted">Suggestions use your saved answers and only include unused, published teacher questions. They are prompts to practice, not a diagnosis.</p>
+      {targets.map(target=><div className="row" key={target.conceptId} style={{marginTop:10}}>
+        <div><strong>{target.name}</strong><p className="muted">{target.reason}</p></div>
+        <button className="button small" disabled={busy} onClick={()=>void run(async()=>{
+          setSelected(target.conceptId);setLesson(null);setHistory([]);setResult("");setWalkthrough("");
+          const next=await api<{sessionId:string;prompt:string}>(`/api/concepts/${target.conceptId}/practice`,{method:"POST"});
+          setSession(next);setAnswer("");setHints([]);
+        })}>Start focused practice</button>
+      </div>)}
+    </div>}
     <p className="muted" style={{marginTop:20}}>Explanation format and hint style can be changed in Preferences.</p>
     {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Your teacher has not added concepts yet.</p>}
     {selected && <div className="resource-card" style={{marginTop:18}}><h3>{concepts.find((x)=>x.id===selected)?.name}</h3>
@@ -86,8 +127,10 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>
     {!baselineReady&&<p className="muted">Complete the course baseline to unlock lessons and practice. Your goal and availability can be saved now.</p>}
     {lesson && <div style={{marginTop:16}}><p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
-      {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p></div>}</div>}
-    {history.map((item,i)=><div key={i} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span></div>)}
+      {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p></div>}
+      <div aria-label="Lesson comprehension checks">{lesson.checks.map(check=><LessonCheckView key={check.id} lessonId={lesson.id} check={check} run={run}/>)}</div></div>}
+    {history.map((item)=><div key={item.id} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span>
+      {item.checks.map(check=><LessonCheckView key={check.id} lessonId={item.id} check={check} run={run}/>)}</div>)}
       {session && <div style={{marginTop:18}}><h3>{session.kind==="twin"?"Linked twin question":session.concept ? `Prerequisite check: ${session.concept}` : "Teacher-approved practice"}</h3><p>{session.prompt}</p>
       {session.kind==="twin"&&<p className="muted">Answer without hints for independent evidence. Using any hint records this attempt as assisted instead.</p>}
       {hints.map((hint,i)=><p key={i}><strong>Hint {i+1}:</strong> {hint}</p>)}
@@ -97,5 +140,6 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><p>{walkthrough}</p><p>Try the next independent problem when you are ready.</p></div>}
     {result && <div className="notice" role="status" style={{marginTop:16}}>{result}</div>}
     </div>}
+    <StudentSchedule courseId={courseId}/>
   </section>;
 }

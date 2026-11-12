@@ -1,0 +1,3 @@
+ALTER TABLE "practice_sessions" ADD COLUMN "parent_session_id" uuid;--> statement-breakpoint
+ALTER TABLE "practice_sessions" ADD COLUMN "diagnostic_depth" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "practice_sessions" ADD CONSTRAINT "practice_sessions_parent_session_id_practice_sessions_id_fk" FOREIGN KEY ("parent_session_id") REFERENCES "public"."practice_sessions"("id") ON DELETE no action ON UPDATE no action;

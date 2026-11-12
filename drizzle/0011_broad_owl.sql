@@ -1,0 +1,3 @@
+ALTER TABLE "study_attempts" ADD COLUMN "lesson_check_id" uuid;--> statement-breakpoint
+ALTER TABLE "study_attempts" ADD CONSTRAINT "study_attempts_lesson_check_id_lesson_checks_id_fk" FOREIGN KEY ("lesson_check_id") REFERENCES "public"."lesson_checks"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "study_attempts_lesson_check_unique" ON "study_attempts" USING btree ("lesson_check_id");

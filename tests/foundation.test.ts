@@ -217,25 +217,34 @@ describe("foundation access and onboarding", () => {
     const sourceV1=await db.query("SELECT id,text,status FROM resource_versions WHERE resource_id=$1 AND version=1",[resource.body.id]);
     expect(sourceV1.rowCount).toBe(1);expect(sourceV1.rows[0].status).toBe("published");
     const makeConcept = async (name:string) => request(app).post(`/api/courses/${id}/concepts`).set(as("teacher")).send({name,resourceId:resource.body.id});
-    const a = await makeConcept("First"); const b = await makeConcept("Second"); const unassessed = await makeConcept("Unassessed");
+    const a = await makeConcept("First"); const b = await makeConcept("Second"); const c = await makeConcept("Third"); const d = await makeConcept("Fourth"); const unassessed = await makeConcept("Unassessed");
     expect(a.status).toBe(201); expect(b.status).toBe(201);
     expect((await request(app).post(`/api/concepts/${b.body.id}/prerequisites`).set(as("teacher")).send({prerequisiteId:a.body.id})).status).toBe(201);
+    expect((await request(app).post(`/api/concepts/${a.body.id}/prerequisites`).set(as("teacher")).send({prerequisiteId:c.body.id})).status).toBe(201);
+    expect((await request(app).post(`/api/concepts/${c.body.id}/prerequisites`).set(as("teacher")).send({prerequisiteId:d.body.id})).status).toBe(201);
     expect((await request(app).post(`/api/concepts/${a.body.id}/prerequisites`).set(as("teacher")).send({prerequisiteId:b.body.id})).status).toBe(400);
     expect((await request(app).post(`/api/courses/${id}/concepts`).set(as("otherInstituteTeacher")).send({name:"Forbidden",resourceId:resource.body.id})).status).toBe(403);
     const assessment = await request(app).post(`/api/courses/${id}/assessments`).set(as("teacher")).send({title:"Objective baseline"});
     const addQuestion = async (conceptId:string, answer:string) => request(app).post(`/api/assessments/${assessment.body.id}/questions`).set(as("teacher")).send({prompt:"What is the value?",answer,resourceId:resource.body.id,conceptId});
-    const qa=await addQuestion(a.body.id,"alpha"); const qb=await addQuestion(b.body.id,"beta");
+    const qa=await addQuestion(a.body.id,"alpha"); const qb=await addQuestion(b.body.id,"beta");const qc=await addQuestion(c.body.id,"gamma");const qd=await addQuestion(d.body.id,"delta");
     expect((await request(app).post(`/api/assessments/${assessment.body.id}/publish`).set(as("teacher"))).status).toBe(200);
     const addProblem = async (conceptId:string,questionId:string,prompt="Twin question?") => request(app).post(`/api/concepts/${conceptId}/problems`).set(as("teacher")).send({questionId,prompt,answer:"solution",hints:["First hint","Second hint","Third hint"]});
     expect((await addProblem(a.body.id,qa.body.id)).status).toBe(201);
+    expect((await addProblem(c.body.id,qc.body.id,"Third prerequisite question?")).status).toBe(201);
+    expect((await addProblem(d.body.id,qd.body.id,"Fourth prerequisite question?")).status).toBe(201);
     expect((await addProblem(b.body.id,qb.body.id)).status).toBe(201);
     expect((await addProblem(b.body.id,qb.body.id,"Second independent variation?")).status).toBe(201);
     expect((await addProblem(b.body.id,qb.body.id,"Third independent variation?")).status).toBe(201);
     expect((await request(app).post(`/api/concepts/${b.body.id}/practice`).set(as("student"))).status).toBe(403);
     expect((await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("otherInstituteStudent"))).status).toBe(403);
     const baselineStart=await request(app).post(`/api/courses/${id}/assessment/start`).set(as("student"));
-    const baseline=await request(app).post(`/api/courses/${id}/assessment/submit`).set(as("student")).send({sessionId:baselineStart.body.sessionId,answers:{[qa.body.id]:" ALPHA ",[qb.body.id]:"wrong"}});
-    expect(baseline.status).toBe(201); expect(baseline.body.score).toBe(1); expect(baseline.body.total).toBe(2);
+    const baseline=await request(app).post(`/api/courses/${id}/assessment/submit`).set(as("student")).send({sessionId:baselineStart.body.sessionId,answers:{[qa.body.id]:" ALPHA ",[qb.body.id]:"wrong",[qc.body.id]:"gamma",[qd.body.id]:"delta"}});
+    expect(baseline.status).toBe(201); expect(baseline.body.score).toBe(3); expect(baseline.body.total).toBe(4);
+    const baselineOnly=(await request(app).get(`/api/courses/${id}/mastery`).set(as("student"))).body.concepts.find((x:any)=>x.id===b.body.id);
+    expect(baselineOnly.independent_attempts).toBe(0);
+    expect(baselineOnly.status).toBe("Baseline checked; independent practice not yet assessed");
+    const targets=await request(app).get(`/api/courses/${id}/targeted-practice`).set(as("student"));
+    expect(targets.body.targets.find((x:any)=>x.conceptId===b.body.id).reason).toContain("baseline answer");
     const snapshot=await db.query("SELECT questions FROM assessment_sessions WHERE id=$1",[baselineStart.body.sessionId]);
     expect(snapshot.rows[0].questions[0].questionVersion).toBe(1);expect(snapshot.rows[0].questions[0].resourceVersionId).toBe(sourceV1.rows[0].id);
     expect((await request(app).get(`/api/resources/${resource.body.id}/excerpt?version=${sourceV1.rows[0].id}&location=Page%201`).set(as("student"))).body.text).toContain("course-specific explanation");
@@ -248,7 +257,13 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).post(`/api/practice/${practice.body.sessionId}/hint`).set(as("student"))).status).toBe(400);
     const wrong=await request(app).post(`/api/practice/${practice.body.sessionId}/answer`).set(as("student")).send({answer:"incorrect"});
     expect(wrong.body.assisted).toBe(true); expect(wrong.body.diagnostic).toBeTruthy();expect(wrong.body.walkthrough).toBe("solution");
-    expect((await request(app).post(`/api/practice/${wrong.body.diagnostic.sessionId}/answer`).set(as("student")).send({answer:"solution"})).body.correct).toBe(true);
+    const diagnostic1=await request(app).post(`/api/practice/${wrong.body.diagnostic.sessionId}/answer`).set(as("student")).send({answer:"incorrect"});
+    expect(diagnostic1.body.correct).toBe(false);expect(diagnostic1.body.diagnostic.concept).toBe("Third");
+    const diagnostic2=await request(app).post(`/api/practice/${diagnostic1.body.diagnostic.sessionId}/answer`).set(as("student")).send({answer:"incorrect"});
+    expect(diagnostic2.body.correct).toBe(false);expect(diagnostic2.body.diagnostic.concept).toBe("Fourth");
+    const diagnostic3=await request(app).post(`/api/practice/${diagnostic2.body.diagnostic.sessionId}/answer`).set(as("student")).send({answer:"incorrect"});
+    expect(diagnostic3.body.correct).toBe(false);expect(diagnostic3.body.diagnostic).toBeNull();
+    expect((await db.query("SELECT max(diagnostic_depth) AS depth FROM practice_sessions WHERE user_id=$1 AND kind='diagnostic'",[actors.student.id])).rows[0].depth).toBe(3);
     const independent=await request(app).post(`/api/concepts/${b.body.id}/practice`).set(as("student"));
     expect((await request(app).post(`/api/practice/${independent.body.sessionId}/answer`).set(as("student")).send({answer:"solution"})).body.assisted).toBe(false);
     const editQuestion=await request(app).patch(`/api/questions/${qb.body.id}`).set(as("teacher")).send({prompt:"Updated baseline question",answer:"beta",conceptId:b.body.id,resourceId:resource.body.id});
@@ -271,11 +286,38 @@ describe("foundation access and onboarding", () => {
     expect(missingKey.status,JSON.stringify(missingKey.body)).toBe(503);
     vi.stubEnv("GROQ_API_KEY","isolated-test-key");
     try {
-      vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({explanation:"Explanation",citations:[{resourceId:resource.body.id,location:"Page 1"}]})}}]}),{status:200,headers:{"Content-Type":"application/json"}})));
+      vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({explanation:"Explanation",citations:[{resourceId:resource.body.id,location:"Page 1"}],checks:[{prompt:"What does the material say?",options:["One","Two","Three","Four"],correctOption:2,citations:[{resourceId:resource.body.id,location:"Page 1"}]}]})}}]}),{status:200,headers:{"Content-Type":"application/json"}})));
       const lesson=await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student"));
       expect(lesson.status).toBe(200); expect(lesson.body.citations[0].location).toBe("Page 1");
+      expect(lesson.body.checks).toHaveLength(1);expect(lesson.body.checks[0].options).toEqual(["One","Two","Three","Four"]);
+      expect(lesson.body.checks[0]).not.toHaveProperty("correctOption");
       expect((await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("teacher"))).status).toBe(403);
-      expect((await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("student"))).body.lessons).toHaveLength(1);
+      const history=await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("student"));
+      expect(history.body.lessons).toHaveLength(1);
+      const check=history.body.lessons[0].checks[0];
+      expect(check.correctOption).toBeNull();
+      expect((await request(app).post(`/api/lessons/${lesson.body.id}/checks/${check.id}/answer`).set(as("student")).send({selectedOption:5})).status).toBe(400);
+      expect((await request(app).post(`/api/lessons/${lesson.body.id}/checks/${check.id}/answer`).set(as("teacher")).send({selectedOption:2})).status).toBe(403);
+      expect((await request(app).post(`/api/lessons/${lesson.body.id}/checks/${check.id}/answer`).set(as("otherInstituteStudent")).send({selectedOption:2})).status).toBe(404);
+      const before=(await request(app).get(`/api/courses/${id}/mastery`).set(as("student"))).body.concepts.find((x:any)=>x.id===b.body.id);
+      const checkResults=await Promise.all([2,0].map(selectedOption=>request(app).post(`/api/lessons/${lesson.body.id}/checks/${check.id}/answer`).set(as("student")).send({selectedOption})));
+      const checkResult=checkResults[0];
+      expect(checkResults[1].body).toEqual(checkResult.body);
+      expect(checkResult.body).toMatchObject({selectedOption:expect.any(Number),correctOption:2});
+      expect(checkResult.body.correct).toBe(checkResult.body.selectedOption===2);
+      expect(checkResult.body.message).toContain("assisted comprehension evidence");
+      const after=(await request(app).get(`/api/courses/${id}/mastery`).set(as("student"))).body.concepts.find((x:any)=>x.id===b.body.id);
+      expect(after.independent_attempts).toBe(before.independent_attempts);
+      expect(after.assisted_correct-before.assisted_correct).toBe(1);
+      const saved=(await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("student"))).body.lessons[0].checks[0];
+      expect(saved).toMatchObject({answered:true,selectedOption:checkResult.body.selectedOption,correct:checkResult.body.correct,correctOption:2});
+      expect((await db.query("SELECT count(*) FROM study_attempts WHERE kind='comprehension' AND lesson_check_id=$1",[check.id])).rows[0].count).toBe("1");
+      const unsupportedCheck=JSON.stringify({choices:[{message:{content:JSON.stringify({
+        explanation:"Unsupported check",citations:[{resourceId:resource.body.id,location:"Page 1"}],
+        checks:[{prompt:"Outside text?",options:["A","B","C","D"],correctOption:0,citations:[{resourceId:resource.body.id,location:"Page 99"}]}]
+      })}}]});
+      vi.stubGlobal("fetch",vi.fn(async()=>new Response(unsupportedCheck,{status:200})));
+      expect((await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student"))).status).toBe(502);
       vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({explanation:"Bad source",citations:[{resourceId:resource.body.id,location:"Page 99"}]})}}]}),{status:200})));
       expect((await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student"))).status).toBe(502);
     } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
@@ -325,11 +367,26 @@ describe("foundation access and onboarding", () => {
     expect(fresh.answer).toBeUndefined();expect(fresh.hints).toEqual([]);
     expect((await request(app).post(`/api/practice/${fresh.sessionId}/answer`).set(as("outsider")).send({answer:"7"})).status).toBe(404);
     const before=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts[0];
+    expect(before.independent_attempts).toBe(0);
     const results=await Promise.all([1,2].map(()=>request(app).post(`/api/practice/${fresh.sessionId}/answer`).set(as("student")).send({answer:"7"})));
     expect(results[0].body).toEqual(results[1].body);
     expect(results[0].body).toMatchObject({kind:"twin",correct:true,assisted:false});
     const after=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts[0];
     expect(after.independent_correct-before.independent_correct).toBe(1);
+    expect(after.status).toBe("Developing");
+    for(const [prompt,expected] of [["5 + 6?","11"],["6 + 7?","13"]]){
+      const extra=(await makeProblem(prompt,expected)).body;
+      expect(extra.id).toBeTruthy();
+    }
+    for(const expected of ["11","13"]){
+      const extra=await request(app).post(`/api/concepts/${concept.id}/practice`).set(as("student"));
+      expect(extra.status).toBe(201);
+      expect((await request(app).post(`/api/practice/${extra.body.sessionId}/answer`).set(as("student")).send({answer:expected})).body.assisted).toBe(false);
+    }
+    const demonstrated=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts[0];
+    expect(demonstrated.independent_attempts).toBe(3);
+    expect(demonstrated.independent_correct).toBe(3);
+    expect(demonstrated.status).toBe("Demonstrated understanding");
     expect((await db.query("SELECT count(*) FROM study_attempts WHERE session_id=$1",[fresh.sessionId])).rows[0].count).toBe("1");
     const resumed=await request(app).post(`/api/practice/${first.body.sessionId}/twin`).set(as("student"));
     expect(resumed.body.submitted).toBe(true);expect(resumed.body.result.assisted).toBe(false);
@@ -354,5 +411,51 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).put(pairUrl).set(as("teacher")).send({twinProblemId:duplicate.id})).status).toBe(400);
     await request(app).post(`/api/resources/${resource.id}/archive`).set(as("teacher"));
     expect((await request(app).post(`/api/practice/${first.body.sessionId}/twin`).set(as("student"))).status).toBe(403);
+  });
+  it("keeps weekly timetable, student availability, and personal commitments correctly scoped", async()=>{
+    const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated timetable"})).body;
+    expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);
+    expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.outsider.email})).status).toBe(201);
+    const url=`/api/courses/${course.id}/timetable`;
+    const classBody={title:"Physics class",weekday:2,startTime:"09:00",endTime:"10:00",startsOn:"2026-11-10",endsOn:"2027-01-05",timezone:"Asia/Kolkata"};
+    expect((await request(app).post(url).set(as("student")).send(classBody)).status).toBe(403);
+    expect((await request(app).post(url).set(as("otherInstituteTeacher")).send(classBody)).status).toBe(403);
+    expect((await request(app).post(url).set(as("teacher")).send({...classBody,timezone:"Mars/Olympus"})).status).toBe(400);
+    expect((await request(app).post(url).set(as("teacher")).send({...classBody,endTime:"09:00"})).status).toBe(400);
+    const created=await request(app).post(url).set(as("teacher")).send(classBody);
+    expect(created.status).toBe(201);
+    expect((await request(app).post(url).set(as("teacher")).send({...classBody,startTime:"09:30",endTime:"10:30"})).status).toBe(409);
+    expect((await request(app).get(url).set(as("student"))).body.events[0]).toMatchObject({title:"Physics class",timezone:"Asia/Kolkata",exceptions:[]});
+    const exceptions=`${url}/${created.body.event.id}/cancel-date`;
+    expect((await request(app).post(exceptions).set(as("teacher")).send({date:"2026-11-18"})).status).toBe(400);
+    expect((await request(app).post(exceptions).set(as("teacher")).send({date:"2026-11-17"})).status).toBe(200);
+    expect((await request(app).post(exceptions).set(as("teacher")).send({date:"2026-11-17"})).status).toBe(200);
+    expect((await request(app).get(url).set(as("student"))).body.events[0].exceptions).toEqual(["2026-11-17"]);
+    expect((await request(app).delete(`${url}/${created.body.event.id}`).set(as("teacher"))).status).toBe(200);
+    expect((await request(app).get(url).set(as("student"))).body.events[0].status).toBe("cancelled");
+
+    const availability=`/api/courses/${course.id}/availability`;
+    expect((await request(app).get(availability).set(as("student"))).body.availability.intervals).toEqual([]);
+    const saved=await request(app).put(availability).set(as("student")).send({timezone:"Asia/Kolkata",intervals:[
+      {weekday:1,startTime:"09:00",endTime:"12:00"},{weekday:1,startTime:"12:00",endTime:"13:00"},{weekday:3,startTime:"16:00",endTime:"18:00"}
+    ]});
+    expect(saved.status).toBe(200);expect(saved.body.availability.intervals).toHaveLength(3);
+    expect((await request(app).put(availability).set(as("student")).send({timezone:"Invalid/Zone",intervals:[]})).status).toBe(400);
+    expect((await request(app).put(availability).set(as("student")).send({timezone:"Asia/Kolkata",intervals:[
+      {weekday:1,startTime:"09:00",endTime:"11:00"},{weekday:1,startTime:"10:30",endTime:"12:00"}
+    ]})).status).toBe(400);
+    expect((await request(app).get(availability).set(as("teacher"))).status).toBe(403);
+    expect((await request(app).get(availability).set(as("outsider"))).body.availability.intervals).toEqual([]);
+
+    const commitments=`/api/courses/${course.id}/commitments`;
+    expect((await request(app).get(commitments).set(as("teacher"))).status).toBe(403);
+    const meeting={title:"Private appointment",startsAt:"2026-11-20T08:00:00.000Z",endsAt:"2026-11-20T09:00:00.000Z",timezone:"Asia/Kolkata",courseId:course.id};
+    expect((await request(app).post(commitments).set(as("student")).send({...meeting,startsAt:"2026-11-20T08:00:00"})).status).toBe(400);
+    const commitment=await request(app).post(commitments).set(as("student")).send(meeting);
+    expect(commitment.status).toBe(201);
+    expect((await request(app).post(commitments).set(as("student")).send({...meeting,startsAt:"2026-11-20T08:30:00.000Z",endsAt:"2026-11-20T09:30:00.000Z"})).status).toBe(409);
+    expect((await request(app).get(commitments).set(as("student"))).body.commitments).toHaveLength(1);
+    expect((await request(app).get(commitments).set(as("outsider"))).body.commitments).toEqual([]);
+    expect((await request(app).delete(`${commitments}/${commitment.body.commitment.id}`).set(as("student"))).status).toBe(200);
   });
 });
