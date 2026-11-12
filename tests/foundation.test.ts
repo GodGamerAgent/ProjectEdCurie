@@ -436,6 +436,43 @@ describe("foundation access and onboarding", () => {
     await request(app).post(`/api/resources/${resource.id}/archive`).set(as("teacher"));
     expect((await request(app).post(`/api/practice/${first.body.sessionId}/twin`).set(as("student"))).status).toBe(403);
   });
+  it("builds an adaptive mock from published questions and keeps its score separate",async()=>{
+    const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated adaptive mock"})).body;
+    expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);
+    const resource=(await request(app).post(`/api/courses/${course.id}/resources`).set(as("teacher")).field("title","Mock source").field("text","Published material for a mock.")).body;
+    expect((await request(app).post(`/api/resources/${resource.id}/publish`).set(as("teacher"))).status).toBe(200);
+    const weak=(await request(app).post(`/api/courses/${course.id}/concepts`).set(as("teacher")).send({name:"Needs work",resourceId:resource.id})).body;
+    const untouched=(await request(app).post(`/api/courses/${course.id}/concepts`).set(as("teacher")).send({name:"New topic",resourceId:resource.id})).body;
+    const assessment=(await request(app).post(`/api/courses/${course.id}/assessments`).set(as("teacher")).send({title:"Mock question bank"})).body;
+    const questions=[];
+    for(const [concept,prompt,answer] of [[weak,"Weak one?","yes"],[weak,"Weak two?","yes"],[untouched,"New one?","yes"],[untouched,"New two?","yes"]]){
+      questions.push((await request(app).post(`/api/assessments/${assessment.id}/questions`).set(as("teacher")).send({prompt,answer,resourceId:resource.id,conceptId:concept.id})).body);
+    }
+    expect((await request(app).post(`/api/assessments/${assessment.id}/publish`).set(as("teacher"))).status).toBe(200);
+    const baseline=(await request(app).post(`/api/courses/${course.id}/assessment/start`).set(as("student"))).body;
+    const baselineAnswers=Object.fromEntries(questions.map((q:any,i:number)=>[q.id,i===0?"wrong":"yes"]));
+    expect((await request(app).post(`/api/courses/${course.id}/assessment/submit`).set(as("student")).send({sessionId:baseline.sessionId,answers:baselineAnswers})).status).toBe(201);
+    const before=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts;
+    const starts=await Promise.all([1,2].map(()=>request(app).post(`/api/courses/${course.id}/mocks/start`).set(as("student"))));
+    expect(starts[0].body.id).toBe(starts[1].body.id);
+    const mock=starts[0].body;
+    expect(mock.status).toBe("active");expect(mock.questions).toHaveLength(4);
+    expect(mock.questions[0].conceptId).toBe(weak.id);
+    expect(mock.questions[0].expectedAnswer).toBeUndefined();
+    expect((await request(app).get(`/api/mock-sessions/${mock.id}`).set(as("outsider"))).status).toBe(404);
+    expect((await request(app).post(`/api/mock-sessions/${mock.id}/submit`).set(as("student"))).status).toBe(400);
+    expect((await request(app).post(`/api/mock-sessions/${mock.id}/answer`).set(as("student")).send({questionId:"d7f7f6f9-02ce-4dcc-bef2-34124a4774e8",answer:"yes"})).status).toBe(400);
+    const saved=await request(app).post(`/api/mock-sessions/${mock.id}/answer`).set(as("student")).send({questionId:mock.questions[0].id,answer:"yes"});
+    expect(saved.body.saved).toBe(true);
+    expect((await request(app).get(`/api/mock-sessions/${mock.id}`).set(as("student"))).body.questions[0].expectedAnswer).toBeUndefined();
+    for(const q of mock.questions.slice(1))await request(app).post(`/api/mock-sessions/${mock.id}/answer`).set(as("student")).send({questionId:q.id,answer:"yes"});
+    const submitted=await request(app).post(`/api/mock-sessions/${mock.id}/submit`).set(as("student"));
+    expect(submitted.body).toMatchObject({score:100,correctCount:4,questionCount:4});
+    expect(submitted.body.details[0].expectedAnswer).toBe("yes");
+    expect((await request(app).post(`/api/mock-sessions/${mock.id}/submit`).set(as("student"))).body).toEqual(submitted.body);
+    const after=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts;
+    expect(after.map((c:any)=>c.independent_attempts)).toEqual(before.map((c:any)=>c.independent_attempts));
+  });
   it("keeps weekly timetable, student availability, and personal commitments correctly scoped", async()=>{
     const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated timetable"})).body;
     expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);

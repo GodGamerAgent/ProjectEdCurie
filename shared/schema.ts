@@ -318,6 +318,20 @@ export const reviewEvents = pgTable("review_events", {
   reviewLog: jsonb("review_log").notNull(),
   createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
 });
+export const adaptiveMockSessions = pgTable("adaptive_mock_sessions",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  questions: jsonb("questions").notNull(),
+  answers: jsonb("answers").notNull().default({}),
+  status: text("status").notNull().default("active"),
+  score: integer("score"),
+  correctCount: integer("correct_count"),
+  questionCount: integer("question_count").notNull(),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+  completedAt: timestamp("completed_at",{withTimezone:true})
+},table=>[uniqueIndex("adaptive_mock_one_active_per_course").on(table.userId,table.courseId).where(sql`${table.status}='active'`)]);
 export const aiGenerations = pgTable("ai_generations", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id),
