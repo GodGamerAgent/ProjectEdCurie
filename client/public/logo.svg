@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 44" role="img" aria-labelledby="title">
+  <title id="title">EdCurie</title>
+  <rect x="1" y="5" width="34" height="34" rx="11" fill="#8c7fd0" fill-opacity=".34" stroke="#d9d2ff" stroke-opacity=".8"/>
+  <path d="M11 27.5V16h11v3H14v1.4h7.4v2.8H14v1.4h8v2.9H11Zm13.3 0v-3.1h4.9v-5.3h-4.9V16h7.9v11.5h-7.9Z" fill="#fff"/>
+  <text x="45" y="29" fill="#f4f2ff" font-family="Manrope, sans-serif" font-size="21" font-weight="800" letter-spacing="-1.2">EdCurie</text>
+</svg>
