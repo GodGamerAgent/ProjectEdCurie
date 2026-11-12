@@ -2,8 +2,11 @@ import { Router } from "express";
 import type { Pool } from "pg";
 import { HttpError } from "./auth";
 import { cleanString, courseAccess, currentUser, eligibility, requireRole, teacherCourse, uuid } from "./access";
+import { DefaultScheduler, Rating } from "ts-fsrs";
 
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+let fsrsScheduler:Awaited<ReturnType<typeof DefaultScheduler>>|undefined;
+async function scheduler(){return fsrsScheduler??=(await DefaultScheduler({version:"FSRS-7",desiredRetention:0.9,enableFuzz:false}));}
 async function concept(db: Pool, id: string) {
   const result = await db.query("SELECT id,course_id,name,resource_id FROM concepts WHERE id=$1", [uuid(id)]);
   if (!result.rowCount) throw new HttpError(404, "Concept not found.");
@@ -271,7 +274,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   });
   router.post("/api/practice/:id/answer", async (req,res)=>{
     const user=currentUser(res); requireRole(user,"student"); const answer=cleanString(req.body.answer,"Answer",5000);
-    const found=await db.query(`SELECT s.id,s.kind,s.submitted,s.hint_count,s.diagnostic_depth,p.answer,p.concept_id,c.course_id FROM practice_sessions s
+    const found=await db.query(`SELECT s.id,s.kind,s.submitted,s.hint_count,s.diagnostic_depth,s.problem_id,p.answer,p.concept_id,c.course_id FROM practice_sessions s
       JOIN practice_problems p ON p.id=s.problem_id JOIN concepts c ON c.id=p.concept_id
       JOIN questions q ON q.id=p.question_id JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id AND qv.concept_id=c.id
       JOIN assessments a ON a.id=q.assessment_id AND a.course_id=c.course_id JOIN resources r ON r.id=q.resource_id AND r.course_id=c.course_id
@@ -289,7 +292,15 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
         await client.query("COMMIT");return res.json(prior);
       }
       const assisted=updated.rows[0].hint_count>0;
-      await client.query("INSERT INTO study_attempts (user_id,course_id,concept_id,session_id,kind,correct,assisted) VALUES ($1,$2,$3,$4,$5,$6,$7)",[user.id,s.course_id,s.concept_id,s.id,s.kind,correct,assisted]);
+      await client.query("INSERT INTO study_attempts (user_id,course_id,concept_id,session_id,problem_id,kind,correct,assisted) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",[user.id,s.course_id,s.concept_id,s.id,s.problem_id,s.kind,correct,assisted]);
+      if(["practice","twin"].includes(s.kind)){
+        const f=await scheduler(),now=new Date(),grade=!correct?Rating.Again:assisted?Rating.Hard:Rating.Good;
+        const scheduled=f.review({card:f.newCard({now}) as any,grade,now});
+        await client.query(`INSERT INTO review_cards(user_id,course_id,concept_id,problem_id,card,due_at,last_reviewed_at)
+          VALUES($1,$2,$3,$4,$5::jsonb,$6,$7) ON CONFLICT(user_id,problem_id) DO NOTHING`,
+        [user.id,s.course_id,s.concept_id,s.problem_id,
+          JSON.stringify(scheduled.card),scheduled.card.dueAt,now]);
+      }
       let diagnostic=null;
       if (!correct && ["practice","diagnostic"].includes(s.kind) && s.diagnostic_depth<3) {
         const p=await client.query(`SELECT p.id,p.prompt,c.name FROM concept_prerequisites cp JOIN concepts c ON c.id=cp.prerequisite_id JOIN practice_problems p ON p.concept_id=c.id
@@ -340,9 +351,9 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       LEFT JOIN LATERAL(
         SELECT count(*)::int AS independent_attempts,count(*) FILTER(WHERE correct)::int AS independent_correct,
           COALESCE(jsonb_agg(correct ORDER BY created_at DESC,id DESC),'[]'::jsonb) AS recent_independent
-        FROM(SELECT sa.id,sa.correct,sa.created_at,row_number() OVER(PARTITION BY ps.problem_id ORDER BY sa.created_at DESC,sa.id DESC) AS version
-          FROM study_attempts sa JOIN practice_sessions ps ON ps.id=sa.session_id
-          WHERE sa.user_id=$2 AND sa.course_id=c.course_id AND sa.concept_id=c.id AND sa.kind IN('practice','twin') AND NOT sa.assisted) distinct_problems
+         FROM(SELECT sa.id,sa.correct,sa.created_at,row_number() OVER(PARTITION BY sa.problem_id ORDER BY sa.created_at DESC,sa.id DESC) AS version
+           FROM study_attempts sa
+           WHERE sa.user_id=$2 AND sa.course_id=c.course_id AND sa.concept_id=c.id AND sa.kind IN('practice','twin','review') AND sa.problem_id IS NOT NULL AND NOT sa.assisted) distinct_problems
         WHERE version=1
       ) e ON true
       WHERE c.course_id=$1 GROUP BY c.id,e.independent_attempts,e.independent_correct,e.recent_independent ORDER BY c.created_at`,[req.params.id,user.id]);
@@ -352,7 +363,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     const user=currentUser(res);await studentReady(db,user,req.params.id);
     const targets=await db.query(`SELECT c.id AS "conceptId",c.name,
       CASE WHEN EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id
-          AND a.kind IN ('practice','twin','diagnostic','comprehension') AND a.correct=false)
+           AND a.kind IN ('practice','twin','review','diagnostic','comprehension') AND a.correct=false)
         THEN 'A previous attempt on this topic may benefit from another check.'
         WHEN EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id AND a.kind='baseline' AND a.correct=false)
         THEN 'A baseline answer suggests this topic could use practice.'
@@ -384,9 +395,9 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       LEFT JOIN LATERAL(
         SELECT count(*)::int AS independent_attempts,count(*) FILTER(WHERE correct)::int AS independent_correct,
           COALESCE(jsonb_agg(correct ORDER BY created_at DESC,id DESC),'[]'::jsonb) AS recent_independent
-        FROM(SELECT sa.id,sa.correct,sa.created_at,row_number() OVER(PARTITION BY ps.problem_id ORDER BY sa.created_at DESC,sa.id DESC) AS version
-          FROM study_attempts sa JOIN practice_sessions ps ON ps.id=sa.session_id
-          WHERE sa.user_id=u.id AND sa.course_id=e.course_id AND sa.concept_id=c.id AND sa.kind IN('practice','twin') AND NOT sa.assisted) distinct_problems
+         FROM(SELECT sa.id,sa.correct,sa.created_at,row_number() OVER(PARTITION BY sa.problem_id ORDER BY sa.created_at DESC,sa.id DESC) AS version
+           FROM study_attempts sa
+           WHERE sa.user_id=u.id AND sa.course_id=e.course_id AND sa.concept_id=c.id AND sa.kind IN('practice','twin','review') AND sa.problem_id IS NOT NULL AND NOT sa.assisted) distinct_problems
         WHERE version=1
       ) ev ON true
       WHERE e.course_id=$1 GROUP BY u.id,c.id,ev.independent_attempts,ev.independent_correct,ev.recent_independent ORDER BY u.email,c.name`,[req.params.id]);

@@ -113,6 +113,20 @@
       "when": 1794465506143,
       "tag": "0015_glossy_mephistopheles",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794466258336,
+      "tag": "0016_glamorous_venom",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794466586855,
+      "tag": "0017_dashing_xorn",
+      "breakpoints": true
     }
   ]
 }

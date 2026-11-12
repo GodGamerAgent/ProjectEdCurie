@@ -198,11 +198,13 @@ export const studyAttempts = pgTable("study_attempts", {
   conceptId: uuid("concept_id").notNull().references(() => concepts.id),
   sessionId: uuid("session_id").references(() => practiceSessions.id),
   lessonCheckId: uuid("lesson_check_id").references(() => lessonChecks.id),
+  problemId: uuid("problem_id").references(() => practiceProblems.id),
+  reviewSessionId: uuid("review_session_id"),
   kind: text("kind").notNull(),
   correct: boolean("correct").notNull(),
   assisted: boolean("assisted").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
-}, table => [uniqueIndex("study_attempts_lesson_check_unique").on(table.lessonCheckId)]);
+}, table => [uniqueIndex("study_attempts_lesson_check_unique").on(table.lessonCheckId),uniqueIndex("study_attempts_review_session_unique").on(table.reviewSessionId)]);
 export const practiceTwinLinks = pgTable("practice_twin_links", {
   originalProblemId: uuid("original_problem_id").primaryKey().references(() => practiceProblems.id),
   twinProblemId: uuid("twin_problem_id").notNull().unique().references(() => practiceProblems.id),
@@ -280,6 +282,41 @@ export const studyBlocks = pgTable("study_blocks", {
   explanation: text("explanation").notNull(),
   startedAt: timestamp("started_at",{withTimezone:true}),
   completedAt: timestamp("completed_at",{withTimezone:true})
+});
+export const reviewCards = pgTable("review_cards", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  problemId: uuid("problem_id").notNull().references(() => practiceProblems.id),
+  card: jsonb("card").notNull(),
+  dueAt: timestamp("due_at",{withTimezone:true}).notNull(),
+  lastReviewedAt: timestamp("last_reviewed_at",{withTimezone:true})
+},table=>[uniqueIndex("review_cards_user_problem_unique").on(table.userId,table.problemId)]);
+export const reviewSessions = pgTable("review_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  cardId: uuid("card_id").notNull().references(() => reviewCards.id),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  prompt: text("prompt").notNull(),
+  expectedAnswer: text("expected_answer").notNull(),
+  selectedAnswer: text("selected_answer"),
+  correct: boolean("correct"),
+  result: jsonb("result"),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+  answeredAt: timestamp("answered_at",{withTimezone:true})
+},table=>[uniqueIndex("review_sessions_one_active_per_card").on(table.cardId).where(sql`${table.status}='active'`)]);
+export const reviewEvents = pgTable("review_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  sessionId: uuid("session_id").notNull().unique().references(() => reviewSessions.id),
+  cardId: uuid("card_id").notNull().references(() => reviewCards.id),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  rating: integer("rating").notNull(),
+  correct: boolean("correct").notNull(),
+  previousDueAt: timestamp("previous_due_at",{withTimezone:true}).notNull(),
+  nextDueAt: timestamp("next_due_at",{withTimezone:true}).notNull(),
+  reviewLog: jsonb("review_log").notNull(),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
 });
 export const aiGenerations = pgTable("ai_generations", {
   id: uuid("id").defaultRandom().primaryKey(),

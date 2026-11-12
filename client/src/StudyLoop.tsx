@@ -28,6 +28,30 @@ function LessonCheckView({lessonId,check,run}:{lessonId:string;check:LessonCheck
     </div>}
   </div>;
 }
+function ReviewVault({courseId,baselineReady,refreshKey}:{courseId:string|number;baselineReady:boolean;refreshKey:number}) {
+  const [cards,setCards]=useState<{id:string;conceptName:string;dueAt:string;due:boolean}[]>([]);
+  const [session,setSession]=useState<{sessionId:string;prompt:string}|null>(null);
+  const [answer,setAnswer]=useState(""),[result,setResult]=useState<{correct:boolean;expectedAnswer:string;dueAt:string;intervalDays:number;message:string}|null>(null);
+  const [busy,setBusy]=useState(false),[error,setError]=useState("");
+  const load=useCallback(async()=>{if(!baselineReady){setCards([]);return;}const data=await api<{cards:typeof cards}>(`/api/courses/${courseId}/reviews`);setCards(data.cards);},[courseId,baselineReady]);
+  useEffect(()=>{void load().catch(e=>setError(e.message));},[load,refreshKey]);
+  async function act(action:()=>Promise<void>){setBusy(true);setError("");try{await action();}catch(e){setError(e instanceof Error?e.message:"Review could not be saved.");}finally{setBusy(false);}}
+  return <section className="study-section" aria-labelledby="review-vault-title"><div className="divider"/><div className="eyebrow">Spaced retrieval</div><h3 id="review-vault-title">Review vault</h3>
+    <p className="muted">Due teacher-approved questions appear here. Answer before seeing the expected answer; FSRS schedules the next review from your recall.</p>
+    {error&&<div className="notice error" role="alert">{error}</div>}
+    {!baselineReady?<p className="muted">Complete the baseline to unlock reviews.</p>:cards.length===0?<p className="muted">No review cards are scheduled yet. Your practice attempts add questions here.</p>:
+      <div className="stack">{cards.map(card=><div className="course-card row" key={card.id}>
+        <div><strong>{card.conceptName}</strong><p>{card.due?"Due now":`Next review ${new Date(card.dueAt).toLocaleString()}`}</p></div>
+        <button className="button small" disabled={busy||!card.due} onClick={()=>void act(async()=>{const next=await api<{sessionId:string;prompt:string}>(`/api/review-cards/${card.id}/start`,{method:"POST"});setSession(next);setAnswer("");setResult(null);})}>Review</button>
+      </div>)}</div>}
+    {session&&<div className="resource-card" style={{marginTop:16}}><h4>Recall before revealing</h4><p>{session.prompt}</p>
+      {!result?<form onSubmit={e=>{e.preventDefault();void act(async()=>{const data=await api<typeof result>(`/api/review-sessions/${session.sessionId}/answer`,{method:"POST",body:jsonBody({answer})});if(data){setResult(data);await load();}});}}>
+        <div className="field"><label htmlFor="review-answer">Your answer</label><input id="review-answer" required value={answer} onChange={e=>setAnswer(e.target.value)}/></div>
+        <button className="button primary small" disabled={busy} style={{marginTop:10}}>Submit recall</button>
+      </form>:<div className="notice" role="status"><p>{result.message}</p><p>Expected answer: {result.expectedAnswer}</p><p>Next interval: {result.intervalDays} days · {new Date(result.dueAt).toLocaleString()}</p></div>}
+    </div>}
+  </section>;
+}
 
 export function TeacherStudy({ courseId, resources, assessments, concepts, refresh }: { courseId: string | number; resources: Resource[]; assessments: Assessment[]; concepts: Concept[]; refresh: () => Promise<void> }) {
   const [name,setName]=useState(""); const [resourceId,setResourceId]=useState("");
@@ -73,6 +97,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
   const [targets,setTargets]=useState<{conceptId:string;name:string;reason:string}[]>([]);
   const [selected,setSelected]=useState(""); const [goal,setGoal]=useState("");const [deadline,setDeadline]=useState("");const [availability,setAvailability]=useState("");
   const [goalRefreshKey,setGoalRefreshKey]=useState(0),[plannedPhase,setPlannedPhase]=useState("");
+  const [reviewRefreshKey,setReviewRefreshKey]=useState(0);
   const [lesson,setLesson]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[];checks:LessonCheck[]}|null>(null);
   const [history,setHistory]=useState<{id:string;explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[];checks:LessonCheck[]}[]>([]);
   const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string;kind?:string}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
@@ -138,11 +163,12 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       {session.kind==="twin"&&<p className="muted">Answer without hints for independent evidence. Using any hint records this attempt as assisted instead.</p>}
       {hints.map((hint,i)=><p key={i}><strong>Hint {i+1}:</strong> {hint}</p>)}
       {!session.concept && <button className="button small" disabled={busy||hints.length>=3} onClick={()=>void run(async()=>{const r=await api<{hint:string}>(`/api/practice/${session.sessionId}/hint`,{method:"POST"});setHints((old)=>[...old,r.hint]);})}>Get next hint</button>}
-      <form onSubmit={(e)=>{e.preventDefault();void run(async()=>{const r=await api<{message:string;walkthrough:string|null;diagnostic:{sessionId:string;prompt:string;concept:string}|null}>(`/api/practice/${session.sessionId}/answer`,{method:"POST",body:jsonBody({answer})});setResult(r.message);setWalkthrough(r.walkthrough||"");setAnswer("");setHints([]);setSession(r.diagnostic);await refresh();});}} style={{marginTop:12}}>
+      <form onSubmit={(e)=>{e.preventDefault();void run(async()=>{const r=await api<{message:string;walkthrough:string|null;diagnostic:{sessionId:string;prompt:string;concept:string}|null}>(`/api/practice/${session.sessionId}/answer`,{method:"POST",body:jsonBody({answer})});setResult(r.message);setWalkthrough(r.walkthrough||"");setAnswer("");setHints([]);setSession(r.diagnostic);setReviewRefreshKey(x=>x+1);await refresh();});}} style={{marginTop:12}}>
         <div className="field"><label htmlFor="practice-answer">Your answer</label><input id="practice-answer" required value={answer} onChange={(e)=>setAnswer(e.target.value)}/></div><button className="button primary small" disabled={busy} style={{marginTop:10}}>Submit answer</button></form></div>}
       {walkthrough&&<div className="notice" role="status" style={{marginTop:14}}><strong>Supported walkthrough</strong><p>{walkthrough}</p><p>Try the next independent problem when you are ready.</p></div>}
     {result && <div className="notice" role="status" style={{marginTop:16}}>{result}</div>}
     </div>}
     <StudentSchedule courseId={courseId} baselineReady={baselineReady} refreshKey={goalRefreshKey} onStartBlock={openPlannedConcept}/>
+    <ReviewVault courseId={courseId} baselineReady={baselineReady} refreshKey={reviewRefreshKey}/>
   </section>;
 }

@@ -1,1 +1,2 @@
 - [Direct URL and Vite WebSocket](vite-port-routing.md) — a 426 before the app loads can mean port 80 points at Vite's WebSocket.
+- [FSRS scheduler API](fsrs-scheduler.md) — current `ts-fsrs` uses `DefaultScheduler` and camelCase FSRS-7 card fields; don't use its deprecated legacy card types.

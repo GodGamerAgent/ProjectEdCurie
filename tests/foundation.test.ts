@@ -391,6 +391,30 @@ describe("foundation access and onboarding", () => {
     const resumed=await request(app).post(`/api/practice/${first.body.sessionId}/twin`).set(as("student"));
     expect(resumed.body.submitted).toBe(true);expect(resumed.body.result.assisted).toBe(false);
     expect((await request(app).get(`/api/courses/${course.id}/twin-followups`).set(as("student"))).body.followups[0].status).toBe("completed");
+    const reviewCard=(await db.query("SELECT id FROM review_cards WHERE user_id=$1 AND course_id=$2 ORDER BY id LIMIT 1",[actors.student.id,course.id])).rows[0];
+    expect(reviewCard).toBeTruthy();
+    await db.query("UPDATE review_cards SET due_at=now()-interval '1 minute' WHERE id=$1",[reviewCard.id]);
+    const due=await request(app).get(`/api/courses/${course.id}/reviews`).set(as("student"));
+    expect(due.status).toBe(200);expect(due.body.cards.find((c:any)=>c.id===reviewCard.id).due).toBe(true);
+    expect(JSON.stringify(due.body)).not.toContain('"answer"');
+    expect((await request(app).post(`/api/review-cards/${reviewCard.id}/start`).set(as("outsider"))).status).toBe(404);
+    const reviewStarts=await Promise.all([1,2].map(()=>request(app).post(`/api/review-cards/${reviewCard.id}/start`).set(as("student"))));
+    expect(reviewStarts.every(x=>[200,201].includes(x.status))).toBe(true);expect(reviewStarts[0].body.sessionId).toBe(reviewStarts[1].body.sessionId);
+    expect(reviewStarts[0].body.prompt).toBeTruthy();expect(reviewStarts[0].body.expectedAnswer).toBeUndefined();
+    const sessionId=reviewStarts[0].body.sessionId;
+    const reviewAnswers=await Promise.all(["wrong","another"].map(answer=>request(app).post(`/api/review-sessions/${sessionId}/answer`).set(as("student")).send({answer})));
+    expect(reviewAnswers[0].body).toEqual(reviewAnswers[1].body);
+    expect(reviewAnswers[0].body).toMatchObject({correct:false,expectedAnswer:expect.any(String),dueAt:expect.any(String)});
+    expect((await db.query("SELECT count(*) FROM review_events WHERE session_id=$1",[sessionId])).rows[0].count).toBe("1");
+    expect((await request(app).post(`/api/review-cards/${reviewCard.id}/start`).set(as("student"))).status).toBe(409);
+    await db.query(`UPDATE review_cards SET due_at=now()-interval '2 days',
+      card=jsonb_set(jsonb_set(card,'{dueAt}',to_jsonb((now()-interval '2 days')::text)),'{lastReviewAt}',to_jsonb((now()-interval '2 days')::text)) WHERE id=$1`,[reviewCard.id]);
+    const nextReview=(await request(app).post(`/api/review-cards/${reviewCard.id}/start`).set(as("student"))).body;
+    const recalled=await request(app).post(`/api/review-sessions/${nextReview.sessionId}/answer`).set(as("student")).send({answer:reviewAnswers[0].body.expectedAnswer});
+    expect(recalled.body.correct).toBe(true);expect(recalled.body.intervalDays).toBeGreaterThan(0);
+    expect(new Date(recalled.body.dueAt).getTime()).toBeGreaterThan(Date.now());
+    expect((await db.query("SELECT rating FROM review_events WHERE session_id=$1",[nextReview.sessionId])).rows[0].rating).toBe(3);
+    expect((await db.query("SELECT kind,assisted FROM study_attempts WHERE review_session_id=$1",[nextReview.sessionId])).rows[0]).toEqual({kind:"review",assisted:false});
     // A second student uses a hint on the twin: only assisted evidence increases.
     const other=await request(app).post(`/api/concepts/${concept.id}/practice`).set(as("outsider"));
     await request(app).post(`/api/practice/${other.body.sessionId}/answer`).set(as("outsider")).send({answer:"5"});
