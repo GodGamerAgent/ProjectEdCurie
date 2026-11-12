@@ -163,6 +163,7 @@ export const practiceSessions = pgTable("practice_sessions", {
   kind: text("kind").notNull().default("practice"),
   hintCount: integer("hint_count").notNull().default(0),
   submitted: boolean("submitted").notNull().default(false),
+  result: jsonb("result"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 export const studyAttempts = pgTable("study_attempts", {
@@ -184,6 +185,16 @@ export const tutorLessons = pgTable("tutor_lessons", {
   explanation: text("explanation").notNull(),
   citations: jsonb("citations").$type<{resourceId:string;title:string;location:string}[]>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const practiceTwinLinks = pgTable("practice_twin_links", {
+  originalProblemId: uuid("original_problem_id").primaryKey().references(() => practiceProblems.id),
+  twinProblemId: uuid("twin_problem_id").notNull().unique().references(() => practiceProblems.id),
+  linkedBy: uuid("linked_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const practiceTwinSessions = pgTable("practice_twin_sessions", {
+  originalSessionId: uuid("original_session_id").primaryKey().references(() => practiceSessions.id),
+  twinSessionId: uuid("twin_session_id").notNull().unique().references(() => practiceSessions.id)
 });
 export const aiGenerations = pgTable("ai_generations", {
   id: uuid("id").defaultRandom().primaryKey(),

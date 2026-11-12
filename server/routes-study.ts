@@ -9,7 +9,7 @@ async function concept(db: Pool, id: string) {
   if (!result.rowCount) throw new HttpError(404, "Concept not found.");
   return result.rows[0];
 }
-async function studentReady(db: Pool, user: ReturnType<typeof currentUser>, courseId: string) {
+export async function studentReady(db: Pool, user: ReturnType<typeof currentUser>, courseId: string) {
   requireRole(user, "student");
   await courseAccess(db, user, courseId);
   const gate = await eligibility(db, courseId);
@@ -167,15 +167,22 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   });
   router.post("/api/concepts/:id/practice", async (req,res)=>{
     const c=await concept(db,req.params.id), user=currentUser(res); await studentReady(db,user,c.course_id);
-    const problem=await db.query(`SELECT p.id,p.prompt FROM practice_problems p JOIN questions q ON q.id=p.question_id JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id
+    const client=await db.connect();
+    try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`practice:${user.id}`]);
+    const problem=await client.query(`SELECT p.id,p.prompt FROM practice_problems p JOIN questions q ON q.id=p.question_id JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id
       JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id JOIN resource_versions rv ON rv.id=qv.resource_version_id AND rv.resource_id=r.id
       WHERE p.concept_id=$1 AND qv.concept_id=$1 AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published'
       AND rv.status='published' AND length(btrim(rv.text))>0
+      AND NOT EXISTS (SELECT 1 FROM practice_twin_links pair WHERE pair.twin_problem_id=p.id)
       AND NOT EXISTS (SELECT 1 FROM practice_sessions used WHERE used.problem_id=p.id AND used.user_id=$3 AND used.submitted=true)
       ORDER BY p.created_at LIMIT 1`,[c.id,c.course_id,user.id]);
     if (!problem.rowCount) throw new HttpError(400,"No teacher-approved practice problem is available for this concept yet.");
-    const session=await db.query("INSERT INTO practice_sessions (user_id,problem_id) VALUES ($1,$2) RETURNING id",[user.id,problem.rows[0].id]);
+    const session=await client.query("INSERT INTO practice_sessions (user_id,problem_id) VALUES ($1,$2) RETURNING id",[user.id,problem.rows[0].id]);
+    await client.query("COMMIT");
     res.status(201).json({sessionId:session.rows[0].id,prompt:problem.rows[0].prompt});
+    }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });
   router.post("/api/practice/:id/hint", async (req,res)=>{
     const user=currentUser(res); requireRole(user,"student");
@@ -186,7 +193,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       WHERE s.id=$1 AND s.user_id=$2 AND a.status='published' AND r.status='published' AND rv.status='published' AND length(btrim(rv.text))>0`,[uuid(req.params.id),user.id]);
     if (!row.rowCount) throw new HttpError(404,"Practice session not found.");
     const s=row.rows[0]; await studentReady(db,user,s.course_id);
-    if (s.submitted || s.kind!=="practice") throw new HttpError(400,"Hints are not available for this session.");
+    if (s.submitted || !["practice","twin"].includes(s.kind)) throw new HttpError(400,"Hints are not available for this session.");
     const updated=await db.query("UPDATE practice_sessions SET hint_count=hint_count+1 WHERE id=$1 AND user_id=$2 AND submitted=false AND hint_count<3 RETURNING hint_count",[s.id,user.id]);
     if (!updated.rowCount) throw new HttpError(400,"All three hints have already been shown.");
     const count=updated.rows[0].hint_count; res.json({hint:s.hints[count-1],number:count});
@@ -205,7 +212,11 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     try {
       await client.query("BEGIN");
       const updated=await client.query("UPDATE practice_sessions SET submitted=true WHERE id=$1 AND user_id=$2 AND submitted=false RETURNING hint_count",[s.id,user.id]);
-      if (!updated.rowCount) throw new HttpError(409,"This answer has already been submitted.");
+      if (!updated.rowCount) {
+        const prior=(await client.query("SELECT result FROM practice_sessions WHERE id=$1 AND user_id=$2",[s.id,user.id])).rows[0]?.result;
+        if(!prior)throw new HttpError(409,"This answer has already been submitted.");
+        await client.query("COMMIT");return res.json(prior);
+      }
       const assisted=updated.rows[0].hint_count>0;
       await client.query("INSERT INTO study_attempts (user_id,course_id,concept_id,session_id,kind,correct,assisted) VALUES ($1,$2,$3,$4,$5,$6,$7)",[user.id,s.course_id,s.concept_id,s.id,s.kind,correct,assisted]);
       let diagnostic=null;
@@ -213,12 +224,18 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
         const p=await client.query(`SELECT p.id,p.prompt,c.name FROM concept_prerequisites cp JOIN concepts c ON c.id=cp.prerequisite_id JOIN practice_problems p ON p.concept_id=c.id
           JOIN questions q ON q.id=p.question_id JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id AND qv.concept_id=c.id
           JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id JOIN resource_versions rv ON rv.id=qv.resource_version_id
-          WHERE cp.concept_id=$1 AND c.course_id=$2 AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published' AND rv.status='published' AND length(btrim(rv.text))>0 ORDER BY p.created_at LIMIT 1`,[s.concept_id,s.course_id]);
+          WHERE cp.concept_id=$1 AND c.course_id=$2 AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published' AND rv.status='published' AND length(btrim(rv.text))>0
+          AND NOT EXISTS(SELECT 1 FROM practice_twin_links pair WHERE pair.twin_problem_id=p.id) ORDER BY p.created_at LIMIT 1`,[s.concept_id,s.course_id]);
         if (p.rowCount) { const d=await client.query("INSERT INTO practice_sessions (user_id,problem_id,kind) VALUES ($1,$2,'diagnostic') RETURNING id",[user.id,p.rows[0].id]); diagnostic={sessionId:d.rows[0].id,prompt:p.rows[0].prompt,concept:p.rows[0].name}; }
       }
+      const walkthrough=!correct&&["practice","twin"].includes(s.kind)&&updated.rows[0].hint_count>=3?s.answer:null;
+      const message=s.kind==="twin"
+        ? `${correct?"Correct.":"Not quite."} This twin was recorded as ${assisted?"assisted":"independent"} evidence${assisted?" because you used a hint.":" because you answered without hints."}`
+        : correct ? "Correct." : s.kind==="diagnostic" ? "This diagnostic suggests a prerequisite gap; review it with your teacher." : diagnostic ? "Let's check a prerequisite before drawing conclusions." : "Not quite. Review the concept and try again.";
+      const result={correct,assisted,kind:s.kind,diagnostic,walkthrough,message};
+      await client.query("UPDATE practice_sessions SET result=$2::jsonb WHERE id=$1",[s.id,JSON.stringify(result)]);
       await client.query("COMMIT");
-      const walkthrough=!correct&&s.kind==="practice"&&s.hint_count>=3?s.answer:null;
-      res.json({correct,assisted,kind:s.kind,diagnostic,walkthrough,message:correct ? "Correct." : s.kind==="diagnostic" ? "This diagnostic suggests a prerequisite gap; review it with your teacher." : diagnostic ? "Let's check a prerequisite before drawing conclusions." : "Not quite. Review the concept and try again."});
+      res.json(result);
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   });
   router.get("/api/courses/:id/mastery", async (req,res)=>{

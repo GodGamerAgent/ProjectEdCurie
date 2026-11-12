@@ -8,6 +8,7 @@ import { courseRoutes } from "./routes-courses";
 import { materialRoutes } from "./routes-materials";
 import { instituteRoutes } from "./routes-institutes";
 import { studyRoutes } from "./routes-study";
+import { twinRoutes } from "./routes-twins";
 
 type Resolver = (req: Request) => Promise<AppUser>;
 type InviteSender = (email: string) => Promise<void>;
@@ -51,6 +52,7 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   app.use(courseRoutes(db));
   app.use(materialRoutes(db));
   app.use(studyRoutes(db));
+  app.use(twinRoutes(db));
   app.use("/api", (_req, res) => res.status(404).json({ error: "Not found." }));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const requestId=String(res.locals.requestId||"unknown");

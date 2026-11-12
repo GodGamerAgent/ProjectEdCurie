@@ -333,7 +333,7 @@ function QuestionEditor({question,resources,concepts,busy,onSave}:{question:Ques
       <div className="field"><label htmlFor={`question-source-${question.id}`}>Source material</label><select id={`question-source-${question.id}`} required value={resourceId} onChange={(e)=>setResourceId(e.target.value)}>{resources.map((r)=><option key={r.id} value={r.id}>{r.title} · v{r.version||1}</option>)}</select></div>
       <div className="field"><button className="button small" disabled={busy}>Save as new version</button></div>
     </form>
-    <span className="badge">Source: {resourceTitle}</span>
+    <span className="badge">Source: {resources.find((r)=>String(r.id)===resourceId)?.title||"Not linked"}</span>
     <button className="button small" type="button" style={{marginLeft:8}} onClick={()=>void showHistory()}>Question history</button>
     {error&&<div className="notice error" role="alert">{error}</div>}
     {versions.length>0&&<ul>{versions.map((v)=><li key={v.version}>v{v.version}: {v.prompt} — expected answer: {v.answer}</li>)}</ul>}

@@ -64,6 +64,13 @@
       "when": 1794463278745,
       "tag": "0008_cool_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794463893858,
+      "tag": "0009_thick_starhawk",
+      "breakpoints": true
     }
   ]
 }
