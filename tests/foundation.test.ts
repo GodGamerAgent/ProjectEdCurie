@@ -219,18 +219,24 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).get(`/api/courses/${courseId}/onboarding`).set(as("student"))).body.state).toBe("ready");
   });
   it("extracts PDF pages and permits manual recovery from a failed extraction", async () => {
+    const original = Buffer.concat([samplePdf(), Buffer.from([0, 255, 0])]);
     const pdf = await request(app).post(`/api/courses/${courseId}/resources`).set(as("teacher"))
-      .field("title", "PDF notes").attach("file", samplePdf(), { filename: "notes.pdf", contentType: "application/pdf" });
+      .field("title", "PDF\u0000 notes").attach("file", original, { filename: "notes.pdf", contentType: "application/pdf" });
     expect(pdf.status).toBe(201);
     expect(pdf.body.extractionStatus).toBe("complete");
     expect(pdf.body.text).toContain("[Page 1]");
     expect(pdf.body.text).toContain("Test lesson from page one.");
+    expect(pdf.body.title).toBe("PDF notes");
+    const stored = await db.query(`SELECT r.file_data AS original, v.file_data AS snapshot
+      FROM resources r JOIN resource_versions v ON v.resource_id=r.id AND v.version=r.version WHERE r.id=$1`, [pdf.body.id]);
+    expect(stored.rows[0].original).toEqual(original);
+    expect(stored.rows[0].snapshot).toEqual(original);
     const broken = await request(app).post(`/api/courses/${courseId}/resources`).set(as("teacher"))
       .field("title", "Unextractable PDF").attach("file", Buffer.from("%PDF-broken"), { filename: "broken.pdf", contentType: "application/pdf" });
     expect(broken.status).toBe(201);
     expect(broken.body.extractionStatus).toBe("error");
     expect((await request(app).post(`/api/resources/${broken.body.id}/publish`).set(as("teacher"))).status).toBe(400);
-    expect((await request(app).patch(`/api/resources/${broken.body.id}`).set(as("teacher")).send({ title: "Unextractable PDF", text: "Manual section: teacher supplied text." })).status).toBe(200);
+    expect((await request(app).patch(`/api/resources/${broken.body.id}`).set(as("teacher")).send({ title: "Unextractable PDF", text: "Manual section: teacher\u0000 supplied text." })).body.text).toBe("Manual section: teacher supplied text.");
     expect((await request(app).post(`/api/resources/${broken.body.id}/publish`).set(as("teacher"))).status).toBe(200);
   });
   it("runs the isolated study loop with source validation and institute isolation", async () => {

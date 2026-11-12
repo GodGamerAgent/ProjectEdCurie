@@ -6,6 +6,8 @@ import { HttpError } from "./auth";
 import { cleanString, courseAccess, currentUser, teacherCourse, uuid } from "./access";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
+const databaseText = (value: unknown) => typeof value === "string" ? value.replaceAll("\u0000", "").trim() : "";
+
 async function resourceById(db: Pool, id: string) {
   uuid(id);
   const result = await db.query("SELECT id,course_id,title,text,status,extraction_status,file_name,mime_type,version,(file_data IS NOT NULL) AS has_file FROM resources WHERE id=$1", [id]);
@@ -23,8 +25,8 @@ export function materialRoutes(db: Pool) {
   router.post("/api/courses/:id/resources", async (req, res, next) => {
     try { await teacherCourse(db, currentUser(res), String(req.params.id)); next(); } catch (error) { next(error); }
   }, upload.single("file"), async (req, res) => {
-    const title = cleanString(req.body.title, "Resource title", 200);
-    let text = typeof req.body.text === "string" ? req.body.text.trim() : "";
+    const title = cleanString(databaseText(req.body.title), "Resource title", 200);
+    let text = databaseText(req.body.text);
     if (text.length > 500_000) throw new HttpError(400, "Resource text is too long.");
     let extraction = text ? "manual" : "pending";
     let mime: string | null = null;
@@ -39,15 +41,15 @@ export function materialRoutes(db: Pool) {
             const parser = new PDFParse({ data: req.file.buffer });
             try {
               const result = await parser.getText();
-              text = result.pages.map((page) => `[Page ${page.num}]\n${page.text.replaceAll("\u0000", "").trim()}`).join("\n\n").trim();
-              if (!result.pages.some((page) => page.text.replaceAll("\u0000", "").trim())) text = "";
+              text = result.pages.map((page) => `[Page ${page.num}]\n${databaseText(page.text)}`).join("\n\n").trim();
+              if (!result.pages.some((page) => databaseText(page.text))) text = "";
             } finally { await parser.destroy(); }
           } else text = new TextDecoder("utf-8", { fatal: true }).decode(req.file.buffer).trim();
           extraction = text ? "complete" : "error";
         } catch { extraction = "error"; }
       }
     } else if (!text) throw new HttpError(400, "Provide text or upload a PDF or text file.");
-    text = text.replaceAll("\u0000", "").trim();
+    text = databaseText(text);
     if (text.length > 500_000) {
       if (!req.file || extraction !== "complete") throw new HttpError(400, "Resource text is too long; provide a shorter excerpt.");
       text = "";
@@ -59,28 +61,28 @@ export function materialRoutes(db: Pool) {
     try{
       await client.query("BEGIN");
       const result = await client.query(`INSERT INTO resources (course_id,title,text,extraction_status,file_name,mime_type,file_data)
-        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id,title,status,extraction_status AS "extractionStatus",text,version`,
-        [req.params.id, title, text, extraction, req.file?.originalname ?? null, mime, req.file?.buffer ?? null]);
+        VALUES ($1,$2,$3,$4,$5,$6,decode($7,'base64')) RETURNING id,title,status,extraction_status AS "extractionStatus",text,version`,
+        [req.params.id, title, text, extraction, databaseText(req.file?.originalname) || null, mime, req.file?.buffer.toString("base64") ?? null]);
       const resource=result.rows[0];
       await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by)
-        VALUES ($1,1,$2,$3,$4,$5,$6,$7,$8,$9)`,[resource.id,title,text,"draft",extraction,req.file?.originalname??null,mime,req.file?.buffer??null,user.id]);
+        SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2 FROM resources WHERE id=$1`, [resource.id,user.id]);
       await client.query("COMMIT");res.status(201).json(resource);
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });
   router.patch("/api/resources/:id", async (req, res) => {
     const resource = await resourceById(db, req.params.id);
     await teacherCourse(db, currentUser(res), resource.course_id);
-    const title = cleanString(req.body.title, "Resource title", 200);
-    const text = cleanString(req.body.text, "Resource text", 500_000);
+    const title = cleanString(databaseText(req.body.title), "Resource title", 200);
+    const text = cleanString(databaseText(req.body.text), "Resource text", 500_000);
     const user=currentUser(res),client=await db.connect();
     try{
       await client.query("BEGIN");
-      const locked=await client.query("SELECT * FROM resources WHERE id=$1 FOR UPDATE",[resource.id]);
+      const locked=await client.query("SELECT version FROM resources WHERE id=$1 FOR UPDATE",[resource.id]);
       const current=locked.rows[0],version=Number(current.version)+1;
       const result=await client.query(`UPDATE resources SET title=$2,text=$3,extraction_status='manual',status='draft',version=$4 WHERE id=$1
         RETURNING id,title,status,extraction_status AS "extractionStatus",text,version`,[resource.id,title,text,version]);
       await client.query(`INSERT INTO resource_versions (resource_id,version,title,text,status,extraction_status,file_name,mime_type,file_data,created_by)
-        VALUES ($1,$2,$3,$4,'draft','manual',$5,$6,$7,$8)`,[resource.id,version,title,text,current.file_name,current.mime_type,current.file_data,user.id]);
+        SELECT id,version,title,text,status,extraction_status,file_name,mime_type,file_data,$2 FROM resources WHERE id=$1`, [resource.id,user.id]);
       await client.query("COMMIT");res.json(result.rows[0]);
     }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
   });

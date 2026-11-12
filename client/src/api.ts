@@ -18,6 +18,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     try {
       const body = await response.json();
       message = body.message || body.error || message;
+      if (response.status >= 500 && typeof body.requestId === "string") {
+        message += ` Request ID: ${body.requestId}`;
+      }
     } catch {
       try { message = (await response.text()) || message; } catch { /* retain status message */ }
     }
