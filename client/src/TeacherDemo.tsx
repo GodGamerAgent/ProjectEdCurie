@@ -81,6 +81,7 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
   const [suggestions,setSuggestions]=useState<Record<string,Suggestion>>({});
   const [replaceExisting,setReplaceExisting]=useState(false);
   const [answering,setAnswering]=useState(false);
+  const [originals,setOriginals]=useState<Record<string,{prompt:string;answer:string}>>({});
   const position=(id:string)=>questions.findIndex(q=>q.id===id)+1;
   const bankResources=resources.filter(r=>r.questions.some(q=>q.kind==="text") || r.summary.trim());
   async function persist(next:Question[],publish=false) {
@@ -143,7 +144,32 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
       setIssues([e instanceof Error?e.message:"Could not generate answers."]);
     } finally { setAnswering(false); }
   }
+  /** Rewrites flagged questions as A–D multiple choice in the editor only; the teacher can undo before saving. */
+  async function convertToMultipleChoice(ids:string[]) {
+    const targets=questions.filter(q=>ids.includes(q.id) && q.kind==="academic" && q.prompt.trim());
+    if (!targets.length) return;
+    setAnswering(true);setIssues([]);setNotice("");
+    try {
+      const data=await api<{results:{id:string;status:"converted"|"needs_review";prompt:string;answer:string;reason:string}[]}>(base+"/baseline/multiple-choice",{method:"POST",body:jsonBody({
+        questions:targets.map(q=>({id:q.id,prompt:q.prompt,resourceId:q.resourceId,position:position(q.id),reason:suggestions[q.id]?.reason??""}))})});
+      const converted=data.results.filter(r=>r.status==="converted" && targets.some(q=>q.id===r.id));
+      const still=data.results.filter(r=>r.status!=="converted");
+      setOriginals(old=>({...old,...Object.fromEntries(targets.filter(q=>converted.some(r=>r.id===q.id) && !old[q.id]).map(q=>[q.id,{prompt:q.prompt,answer:q.answer}]))}));
+      setQuestions(all=>all.map(q=>{const r=converted.find(x=>x.id===q.id);return r?{...q,prompt:r.prompt,answer:r.answer}:q;}));
+      setSuggestions(old=>{
+        const next={...old};
+        for (const r of converted) next[r.id]={status:"answered",answer:r.answer,reason:""};
+        for (const r of still) next[r.id]={status:"needs_review",answer:"",reason:r.reason};
+        return next;
+      });
+      if (converted.length) setNotice(`Converted ${converted.map(r=>`question ${position(r.id)}`).join(", ")} to multiple choice. Check the options and the correct letter before publishing.`);
+      if (still.length) setIssues([`Could not convert ${still.map(r=>`question ${position(r.id)}${r.reason?` (${r.reason})`:""}`).join("; ")}.`]);
+    } catch(e) {
+      setIssues([e instanceof Error?e.message:"Could not convert the questions."]);
+    } finally { setAnswering(false); }
+  }
   const academic=questions.filter(q=>q.kind==="academic");
+  const flagged=academic.filter(q=>suggestions[q.id]?.status==="needs_review" && !q.answer.trim());
   const blankAcademic=academic.filter(q=>!q.answer.trim());
   return <section className="stack">
     <div className="row"><h3>Course onboarding</h3><span className="badge">{baseline.published?`Published · revision ${baseline.revision}`:"Draft"}</span></div>
@@ -191,6 +217,7 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
         <span>{chosen.size} academic selected</span>
         <button className="button small primary" disabled={busy || answering || !chosen.size} onClick={()=>void generateAnswers([...chosen])}>Generate answers for selected</button>
         <button className="button small" disabled={busy || answering || !blankAcademic.length} onClick={()=>void generateAnswers(blankAcademic.map(q=>q.id))}>Generate all blank answers ({blankAcademic.length})</button>
+        {flagged.length>0 && <button className="button small" disabled={busy || answering} onClick={()=>void convertToMultipleChoice(flagged.map(q=>q.id))}>Convert flagged to multiple choice ({flagged.length})</button>}
         <label className="select-row"><input type="checkbox" checked={replaceExisting} onChange={e=>setReplaceExisting(e.target.checked)}/> Replace existing answers</label>
         {answering && <span role="status">Generating answers…</span>}
       </div>}
@@ -204,12 +231,20 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
         <MarkdownEditor label="Question" value={q.prompt} maxLength={5000} rows={5} onChange={value=>update(q.id,{prompt:value})}/>
         {q.kind==="academic" && <>
           <MarkdownEditor label="Expected answer" compact value={q.answer} maxLength={1500} rows={3} onChange={value=>update(q.id,{answer:value})}/>
-          {suggestion?.status==="answered" && suggestion.answer===q.answer && <p className="muted">AI-suggested answer · edit it if needed.</p>}
+          {suggestion?.status==="answered" && suggestion.answer===q.answer && !originals[q.id] && <p className="muted">AI-suggested answer · edit it if needed.</p>}
           {suggestion?.status==="answered" && suggestion.answer!==q.answer && q.answer.trim() && <div className="notice">
             AI suggestion: <strong>{suggestion.answer}</strong>
             <div className="card-actions"><button className="button small" onClick={()=>update(q.id,{answer:suggestion.answer})}>Replace with suggestion</button>
               <button className="button small" onClick={()=>setSuggestions(old=>{const next={...old};delete next[q.id];return next;})}>Dismiss</button></div></div>}
-          {suggestion?.status==="needs_review" && !q.answer.trim() && <p className="notice warn">Needs teacher review: {suggestion.reason}</p>}
+          {suggestion?.status==="needs_review" && !q.answer.trim() && <div className="notice warn">Needs teacher review: {suggestion.reason}
+            <div className="card-actions"><button className="button small primary" disabled={busy || answering} onClick={()=>void convertToMultipleChoice([q.id])}>Convert to multiple choice with AI</button></div></div>}
+          {originals[q.id] && <div className="notice">Converted to multiple choice by AI. Check the options and the correct letter.
+            <div className="card-actions"><button className="button small" onClick={()=>{
+              const original=originals[q.id];
+              update(q.id,original);
+              setOriginals(old=>{const next={...old};delete next[q.id];return next;});
+              setSuggestions(old=>{const next={...old};delete next[q.id];return next;});
+            }}>Undo conversion</button></div></div>}
         </>}
         <div className="card-actions">
           {q.kind==="academic" && <button className="button small" disabled={busy || answering} onClick={()=>void generateAnswers([q.id])}>Generate expected answer</button>}

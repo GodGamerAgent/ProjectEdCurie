@@ -691,3 +691,37 @@ it("publishes the latest edited baseline, explains each validation failure, and 
   expect(onboarding.body.questions.map((q:{prompt:string})=>q.prompt)).toEqual(edited.map(q=>q.prompt));
   expect(JSON.stringify(onboarding.body)).not.toMatch(/"answer"|resourceId/);
 });
+
+it("rewrites flagged questions as validated multiple choice without saving the draft", async () => {
+  const {base}=await demoCourse("Baseline multiple choice");
+  const twoParts={id:"66666666-6666-4666-8666-666666666666",prompt:"Find the first three terms of $a_n=2n+1$ and $b_n=2^n$.",reason:"Two separate sequences."};
+  const duplicate={id:"77777777-7777-4777-8777-777777777777",prompt:"Name the next term of 1, 1, 2, 3, 5."};
+  const opinion={id:"88888888-8888-4888-8888-888888888888",prompt:"Which method do you like best?"};
+  const {calls}=mockProvider((system,data)=>{
+    expect(system).toContain("exactly four options");
+    expect(data.questions[0]).toMatchObject({id:twoParts.id,reviewNote:"Two separate sequences.",source:"course"});
+    return {questions:[
+      {id:opinion.id,status:"needs_review",stem:"",options:["","","",""],correct:"A",reason:"It asks for a personal preference."},
+      {id:twoParts.id,status:"converted",stem:"Find the first three terms of $a_n=2n+1$ and $b_n=2^n$.",
+        options:["A) 3, 5, 7 and 2, 4, 8","1, 3, 5 and 1, 2, 4","3, 5, 7 and 1, 2, 4","2, 4, 6 and 2, 4, 8"],correct:"a",reason:""},
+      {id:duplicate.id,status:"converted",stem:"Next term?",options:["8","8","13","7"],correct:"A",reason:""},
+      {id:"99999999-9999-4999-8999-999999999999",status:"converted",stem:"Stray",options:["1","2","3","4"],correct:"A",reason:""},
+    ]};
+  });
+  try {
+    const convert=(actor:string,questions:object[])=>request(app).post(base+"/baseline/multiple-choice").set(as(actor)).send({questions});
+    const result=await convert("teacher",[twoParts,duplicate,opinion]);
+    expect(result.status,JSON.stringify(result.body)).toBe(200);
+    expect(result.body.results).toEqual([
+      {id:twoParts.id,status:"converted",answer:"A",reason:"",
+        prompt:"Find the first three terms of $a_n=2n+1$ and $b_n=2^n$.\n\nA) 3, 5, 7 and 2, 4, 8\nB) 1, 3, 5 and 1, 2, 4\nC) 3, 5, 7 and 1, 2, 4\nD) 2, 4, 6 and 2, 4, 8"},
+      {id:duplicate.id,status:"needs_review",prompt:"",answer:"",reason:"The AI returned an incomplete set of options. Try again or edit the question."},
+      {id:opinion.id,status:"needs_review",prompt:"",answer:"",reason:"It asks for a personal preference."},
+    ]);
+    expect(calls).toHaveLength(1);
+    expect((await request(app).get(base+"/teacher").set(as("teacher"))).body.baseline.draft).toEqual([]);
+    expect((await convert("student",[twoParts])).status).toBe(403);
+    expect((await convert("otherInstituteTeacher",[twoParts])).status).toBe(403);
+    expect((await convert("teacher",[])).status).toBe(400);
+  } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+});

@@ -4,7 +4,7 @@ import multer from "multer";
 import type { Pool } from "pg";
 import { cleanString, courseAccess, currentUser, NO_BASELINE, NO_RESOURCE, requireRole, teacherCourse, uuid } from "./access";
 import { HttpError } from "./auth";
-import { aiText, demoAI, expectedAnswers, generateOnboardingQuestions, object, transcribe } from "./demo-ai";
+import { aiText, demoAI, expectedAnswers, generateOnboardingQuestions, multipleChoiceRewrites, object, transcribe } from "./demo-ai";
 import { baselineIssues, isMultipleChoice } from "../shared/baseline";
 import { redact, runTests, type CodingSpec } from "./code-runner";
 import { QUESTION_FIELDS, studentQuestion } from "./routes-demo-questions";
@@ -58,7 +58,8 @@ export function demoLearningRoutes(db: Pool) {
     res.json({questions:questions.map(question=>({id:randomUUID(),kind,...question,...(resourceId?{resourceId}:{})}))});
   });
 
-  router.post(base+"/baseline/answers",async(req,res)=>{
+  /** Validates draft questions sent from the editor and gathers the course material each may use. */
+  async function draftQuestionInput(req:{params:Record<string,unknown>;body:Record<string,unknown>},res:Parameters<typeof currentUser>[0],action:string) {
     const courseId=String(req.params.courseId);
     await teacherCourse(db,currentUser(res),courseId);
     const input=req.body.questions;
@@ -70,19 +71,26 @@ export function demoLearningRoutes(db: Pool) {
       if (ids.has(id)) throw new HttpError(400,"Questions must have distinct IDs.");
       ids.add(id);
       const prompt=typeof item.prompt==="string"?item.prompt.replaceAll("\u0000","").trim():"";
-      if (!prompt || prompt.length>5000) throw new HttpError(400,`Add question text (up to 5000 characters) to question ${Number(item.position)||index+1} before generating its answer.`);
-      return {id,prompt,resourceId:typeof item.resourceId==="string"?item.resourceId:undefined};
+      if (!prompt || prompt.length>5000) throw new HttpError(400,`Add question text (up to 5000 characters) to question ${Number(item.position)||index+1} before ${action}.`);
+      return {id,prompt,resourceId:typeof item.resourceId==="string"?item.resourceId:undefined,
+        reason:typeof item.reason==="string"?item.reason.slice(0,300):""};
     });
     const resources=(await db.query(`SELECT id,title,summary,text FROM resources WHERE course_id=$1 AND status<>'archived' ORDER BY status='published' DESC,created_at`,[courseId])).rows as {id:string;title:string;summary:string;text:string}[];
     const material=(r:{title:string;summary:string;text:string},max:number)=>`# ${r.title}\n\n${(r.summary.trim()||r.text).slice(0,max)}`;
     const courseMaterial=resources.map(r=>material(r,2500)).join("\n\n").slice(0,8000);
     const sources:Record<string,string>={};
-    const payload=questions.map(q=>{
+    const withSource=questions.map(q=>{
       const linked=resources.find(r=>r.id===q.resourceId);
       const key=linked?linked.id:"course";
       sources[key]??=linked?material(linked,7000):courseMaterial;
-      return {id:q.id,prompt:q.prompt,format:(isMultipleChoice(q.prompt)?"letter":"short") as "letter"|"short",source:key};
+      return {...q,source:key};
     });
+    return {questions:withSource,sources};
+  }
+
+  router.post(base+"/baseline/answers",async(req,res)=>{
+    const {questions,sources}=await draftQuestionInput(req,res,"generating its answer");
+    const payload=questions.map(q=>({id:q.id,prompt:q.prompt,format:(isMultipleChoice(q.prompt)?"letter":"short") as "letter"|"short",source:q.source}));
     const generated=await expectedAnswers(db,{questions:payload,sources});
     res.json({results:payload.map(q=>{
       const result=generated.get(q.id);
@@ -92,6 +100,16 @@ export function demoLearningRoutes(db: Pool) {
       if (q.format==="letter" && !/^[A-D]$/.test(answer)) return {id:q.id,status:"needs_review",answer:"",reason:"The AI did not return a single option letter."};
       if (!answer || answer.length>300) return {id:q.id,status:"needs_review",answer:"",reason:"The AI answer was empty or too long to grade."};
       return {id:q.id,status:"answered",answer,reason:""};
+    })});
+  });
+
+  router.post(base+"/baseline/multiple-choice",async(req,res)=>{
+    const {questions,sources}=await draftQuestionInput(req,res,"converting it");
+    const generated=await multipleChoiceRewrites(db,{questions:questions.map(q=>({id:q.id,prompt:q.prompt,reviewNote:q.reason,source:q.source})),sources});
+    res.json({results:questions.map(q=>{
+      const result=generated.get(q.id);
+      if (!result) return {id:q.id,status:"needs_review",prompt:"",answer:"",reason:"The AI did not return a multiple-choice version of this question."};
+      return {id:q.id,...result};
     })});
   });
 

@@ -34,3 +34,7 @@ it("detects multiple-choice prompts", () => {
   expect(isMultipleChoice("Pick one:\nA. red\nB. blue")).toBe(true);
   expect(isMultipleChoice("What is the 5th term of 2, 4, 6?")).toBe(false);
 });
+
+it("recognises the server's assembled multiple-choice layout", () => {
+  expect(isMultipleChoice("Find the terms.\n\nA) 3, 5, 7 and 2, 4, 8\nB) 1, 3, 5 and 1, 2, 4\nC) x\nD) y")).toBe(true);
+});
