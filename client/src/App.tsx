@@ -120,7 +120,7 @@ function AuthPage({ kind }: { kind: "sign-in" | "sign-up" }) {
     <Panel className="auth-card">
       <div className="eyebrow">EdCurie learning platform</div>
       <h1>{kind === "sign-in" ? "Welcome back." : "Join your institute."}</h1>
-      <p className="muted">{kind === "sign-in" ? "Continue with your verified email account." : "Use a verified email. Institute members need an approved institute email."}</p>
+      <p className="muted">{kind === "sign-in" ? "Continue with your verified email account." : "Use a verified email. Institute members need an approved institute email; the first administrator must use the configured verified admin email."}</p>
       {kind === "sign-in"
         ? <SignIn routing="path" path={routeUrl("/sign-in")} signUpUrl={routeUrl("/sign-up")} forceRedirectUrl={routeUrl("/app")} />
         : <SignupFieldHints path={routeUrl("/sign-up")} signInUrl={routeUrl("/sign-in")} redirectUrl={routeUrl("/app")} />}

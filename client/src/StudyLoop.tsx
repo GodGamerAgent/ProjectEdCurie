@@ -59,7 +59,7 @@ function ReviewVault({courseId,baselineReady,refreshKey}:{courseId:string|number
   </section>;
 }
 function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineReady:boolean}) {
-  type Mock={id:string;status:string;questions:{id:string;conceptId:string;conceptName:string;prompt:string;sourceTitle:string;sourceLocation:string}[];
+  type Mock={id:string;status:string;questions:{id:string;conceptId:string;conceptName:string;difficulty:number;prompt:string;sourceTitle:string;sourceLocation:string}[];
     answers:Record<string,string>;teacherReview?:string|null;result:{score:number;correctCount:number;questionCount:number;details:{questionId:string;prompt:string;answer:string;expectedAnswer:string;correct:boolean}[];message:string}|null};
   const [mock,setMock]=useState<Mock|null>(null),[draft,setDraft]=useState<Record<string,string>>({});
   const [history,setHistory]=useState<Mock[]>([]);
@@ -68,7 +68,7 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
   const loadHistory=useCallback(async()=>{if(!baselineReady){setHistory([]);return;}setHistory((await api<{sessions:Mock[]}>(`/api/courses/${courseId}/mocks/history`)).sessions);},[courseId,baselineReady]);
   useEffect(()=>{void loadHistory().catch(e=>setError(e.message));},[loadHistory]);
   return <section className="study-section"><div className="divider"/><div className="eyebrow">Assessment practice</div><h3>Adaptive mock</h3>
-    <p className="muted">A short mock prioritizes topics with incorrect or limited evidence. It uses current published, source-linked questions. Mock scores remain separate from mastery.</p>
+    <p className="muted">Mocks prioritize topics with incorrect or limited evidence, then use teacher-estimated concept difficulty and your last mock score to adjust challenge. Scores remain separate from mastery.</p>
     {error&&<div className="notice error" role="alert">{error}</div>}
      {!baselineReady?<p className="muted">Complete the baseline to unlock mocks.</p>:<><button className="button" disabled={busy} onClick={()=>void act(async()=>{
       const next=await api<Mock>(`/api/courses/${courseId}/mocks/start`,{method:"POST"});setMock(next);setDraft(next.answers||{});
@@ -76,7 +76,7 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
      {history.length>0&&<details style={{marginTop:12}}><summary>Previous mocks ({history.length})</summary><div className="stack" style={{marginTop:10}}>{history.map(item=><div className="course-card row" key={item.id}><span><strong>{item.result?.score}% · {item.result?.correctCount}/{item.result?.questionCount}</strong><small>{item.teacherReview?"Teacher feedback available":"Submitted mock"}</small></span><button className="button small" disabled={busy} onClick={()=>void act(async()=>{setMock(await api<Mock>(`/api/mock-sessions/${item.id}`));setDraft(item.answers||{});})}>View result</button></div>)}</div></details>}
      </>}
     {mock?.status==="active"&&<div className="stack" style={{marginTop:16}}>{mock.questions.map((q,i)=><div className="course-card" key={q.id}>
-      <div className="eyebrow">Question {i+1} · {q.conceptName}</div><p>{q.prompt}</p><p className="muted">Source: {q.sourceTitle} · {q.sourceLocation}</p>
+      <div className="eyebrow">Question {i+1} · {q.conceptName} · challenge {q.difficulty}/5</div><p>{q.prompt}</p><p className="muted">Source: {q.sourceTitle} · {q.sourceLocation}</p>
       <div className="field"><label htmlFor={`mock-${q.id}`}>Your answer</label><input id={`mock-${q.id}`} value={draft[q.id]??mock.answers[q.id]??""} onChange={e=>setDraft({...draft,[q.id]:e.target.value})}/></div>
       <button className="button small" disabled={busy||!String(draft[q.id]??mock.answers[q.id]??"").trim()} onClick={()=>void act(async()=>{
         const answer=draft[q.id]??mock.answers[q.id];await api(`/api/mock-sessions/${mock.id}/answer`,{method:"POST",body:jsonBody({questionId:q.id,answer})});

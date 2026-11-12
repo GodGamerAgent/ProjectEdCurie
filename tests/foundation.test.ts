@@ -509,6 +509,10 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).post(`/api/resources/${resource.id}/publish`).set(as("teacher"))).status).toBe(200);
     const weak=(await request(app).post(`/api/courses/${course.id}/concepts`).set(as("teacher")).send({name:"Needs work",resourceId:resource.id})).body;
     const untouched=(await request(app).post(`/api/courses/${course.id}/concepts`).set(as("teacher")).send({name:"New topic",resourceId:resource.id})).body;
+    for(const [concept,difficulty] of [[weak,1],[untouched,5]]){
+      expect((await request(app).patch(`/api/concepts/${concept.id}/estimate`).set(as("teacher"))
+        .send({learningMinutes:30,practiceMinutes:20,revisionMinutes:10,difficulty})).status).toBe(200);
+    }
     const assessment=(await request(app).post(`/api/courses/${course.id}/assessments`).set(as("teacher")).send({title:"Mock question bank"})).body;
     const questions=[];
     for(const [concept,prompt,answer] of [[weak,"Weak one?","yes"],[weak,"Weak two?","yes"],[untouched,"New one?","yes"],[untouched,"New two?","yes"]]){
@@ -516,7 +520,7 @@ describe("foundation access and onboarding", () => {
     }
     expect((await request(app).post(`/api/assessments/${assessment.id}/publish`).set(as("teacher"))).status).toBe(200);
     const baseline=(await request(app).post(`/api/courses/${course.id}/assessment/start`).set(as("student"))).body;
-    const baselineAnswers=Object.fromEntries(questions.map((q:any,i:number)=>[q.id,i===0?"wrong":"yes"]));
+    const baselineAnswers=Object.fromEntries(questions.map((q:any,i:number)=>[q.id,i===0||i===2?"wrong":"yes"]));
     expect((await request(app).post(`/api/courses/${course.id}/assessment/submit`).set(as("student")).send({sessionId:baseline.sessionId,answers:baselineAnswers})).status).toBe(201);
     const before=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts;
     const starts=await Promise.all([1,2].map(()=>request(app).post(`/api/courses/${course.id}/mocks/start`).set(as("student"))));
@@ -547,6 +551,10 @@ describe("foundation access and onboarding", () => {
       .toBe("Revisit the source explanation for the first concept.");
     const after=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts;
     expect(after.map((c:any)=>c.independent_attempts)).toEqual(before.map((c:any)=>c.independent_attempts));
+    const adapted=await request(app).post(`/api/courses/${course.id}/mocks/start`).set(as("student"));
+    expect(adapted.status).toBe(201);
+    expect(adapted.body.questions[0].conceptId).toBe(untouched.id);
+    expect(adapted.body.questions[0].difficulty).toBe(5);
   });
   it("routes assignment submissions through teacher review before exposing diagnosis",async()=>{
     const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated assignment review"})).body;

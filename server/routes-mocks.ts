@@ -7,7 +7,7 @@ import { studentReady } from "./routes-study";
 const normalize=(value:string)=>value.trim().replace(/\s+/g," ").toLocaleLowerCase("en-US");
 function clientView(session:any,teacherReview:string|null=null) {
   const questions=Array.isArray(session.questions)?session.questions.map((q:any)=>({id:q.id,conceptId:q.conceptId,conceptName:q.conceptName,
-    prompt:q.prompt,sourceTitle:q.sourceTitle,sourceLocation:q.sourceLocation})):session.questions;
+    difficulty:q.difficulty,prompt:q.prompt,sourceTitle:q.sourceTitle,sourceLocation:q.sourceLocation})):session.questions;
   return {id:session.id,status:session.status,questions,answers:session.answers||{},result:session.status==="completed"?session.result:null,teacherReview};
 }
 export function mockRoutes(db:Pool) {
@@ -21,8 +21,11 @@ export function mockRoutes(db:Pool) {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`${user.id}:${courseId}:adaptive-mock`]);
       const existing=(await client.query("SELECT * FROM adaptive_mock_sessions WHERE user_id=$1 AND course_id=$2 AND status='active' FOR UPDATE",[user.id,courseId])).rows[0];
       if(existing){await client.query("COMMIT");return res.json(clientView(existing));}
+       const previousScore=(await client.query(`SELECT score FROM adaptive_mock_sessions WHERE user_id=$1 AND course_id=$2 AND status='completed'
+         ORDER BY completed_at DESC LIMIT 1`,[user.id,courseId])).rows[0]?.score;
+       const targetDifficulty=previousScore===undefined?3:previousScore>=80?5:previousScore<50?2:3;
       const questions=(await client.query(`SELECT qv.question_id AS id,qv.concept_id AS "conceptId",c.name AS "conceptName",qv.prompt,qv.answer AS "expectedAnswer",
-          r.title AS "sourceTitle",'Published course material'::text AS "sourceLocation",
+           c.difficulty AS difficulty,r.title AS "sourceTitle",'Published course material'::text AS "sourceLocation",
           CASE WHEN EXISTS(SELECT 1 FROM study_attempts sa WHERE sa.user_id=$2 AND sa.concept_id=c.id AND sa.correct=false) THEN 0
                WHEN EXISTS(SELECT 1 FROM study_attempts sa WHERE sa.user_id=$2 AND sa.concept_id=c.id) THEN 1 ELSE 2 END AS priority
         FROM assessments a JOIN questions q ON q.assessment_id=a.id
@@ -31,7 +34,7 @@ export function mockRoutes(db:Pool) {
         JOIN resource_versions rv ON rv.id=qv.resource_version_id AND rv.status='published' AND length(btrim(rv.text))>0
         JOIN resources r ON r.id=rv.resource_id AND r.course_id=a.course_id AND r.status='published'
         WHERE a.course_id=$1 AND a.status='published' AND length(btrim(qv.answer))>0
-        ORDER BY priority,c.name,qv.question_id LIMIT 10`,[courseId,user.id])).rows;
+         ORDER BY priority,abs(c.difficulty-$3),c.name,qv.question_id LIMIT 10`,[courseId,user.id,targetDifficulty])).rows;
       if(!questions.length)throw new HttpError(400,"No published, source-linked questions are available for a mock.");
       const session=(await client.query(`INSERT INTO adaptive_mock_sessions(user_id,course_id,questions,question_count)
         VALUES($1,$2,$3::jsonb,$4) RETURNING *`,[user.id,courseId,JSON.stringify(questions),questions.length])).rows[0];
