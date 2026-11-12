@@ -622,3 +622,72 @@ it("verifies generated coding questions in the isolated runner and grades studen
     expect(submissions.rows.map(r=>r.verdict)).toEqual(["passed","failed","timeout"]);
   } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
 }, 60000);
+
+it("publishes the latest edited baseline, explains each validation failure, and generates expected answers privately", async () => {
+  const {courseId,base,topicId}=await demoCourse("Baseline answers");
+  const created=await request(app).post(`/api/courses/${courseId}/resources`).set(as("teacher"))
+    .field("title","Sequence notes").field("topicId",topicId).field("processingMode","theory").field("text","# Sequences\n\nThe common difference of 2, 4, 6 is 2.");
+  mockProvider(()=>({summary:"### Sequences\n\nThe common difference of $2, 4, 6$ is $2$.",problems:[]}));
+  try { await processAll(created.body.id); } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  expect((await request(app).post(`/api/resources/${created.body.id}/publish`).set(as("teacher"))).status).toBe(200);
+  const put=(questions:object[],publish:boolean,draftVersion:number)=>request(app).put(base+"/baseline").set(as("teacher")).send({questions,publish,draftVersion});
+  const academic={id:"11111111-1111-4111-8111-111111111111",kind:"academic",prompt:"What is the 5th term of 2, 4, 6, ...?",answer:"10"};
+  const preference={id:"22222222-2222-4222-8222-222222222222",kind:"preferences",prompt:"Do you like worked examples?",answer:""};
+  const blank={id:"33333333-3333-4333-8333-333333333333",kind:"academic",prompt:"Common difference of 2, 4, 6?",answer:"",resourceId:created.body.id};
+
+  // The reported error: an academic question with an answer but no learning preference question.
+  const onlyAcademic=await put([academic],true,0);
+  expect(onlyAcademic.status).toBe(400);
+  expect(onlyAcademic.body.error).toBe("Add at least one learning preference question before publishing. Learning preference questions are unscored and need no answer.");
+  expect((await put([preference],true,0)).body.error).toBe("Add at least one academic question before publishing.");
+  const missing=await put([academic,preference,blank],true,0);
+  expect(missing.body.error).toBe("Add an expected answer to academic question 3.");
+
+  // Draft save, then publish edits that were never saved separately.
+  const draft=await put([academic,preference,blank],false,0);
+  expect(draft.status).toBe(200);
+  const edited=[{...academic,prompt:"What is the 6th term of 2, 4, 6, ...?",answer:"12"},{...preference,prompt:"How do you review after class?"}];
+  expect((await put(edited,true,0)).status).toBe(409);
+  const published=await put(edited,true,draft.body.draftVersion);
+  expect(published.status,JSON.stringify(published.body)).toBe(200);
+  expect(published.body.published).toBe(true);
+  expect((await request(app).put(base+"/baseline").set(as("otherTeacher")).send({questions:edited,publish:true,draftVersion:published.body.draftVersion})).status).toBe(403);
+
+  // Answer generation works on unsaved questions, matches by ID and flags ambiguous ones.
+  const mcq={id:"44444444-4444-4444-8444-444444444444",prompt:"Next term of 3, 7, 11?\n\nA) 15 B) 19 C) 23 D) 27"};
+  const vague={id:"55555555-5555-4555-8555-555555555555",prompt:"Which method is best?"};
+  const {calls}=mockProvider((system,data)=>{
+    expect(system).toContain("Write the expected answer");
+    expect(data.questions.map((q:{id:string;format:string})=>[q.id,q.format])).toEqual([[blank.id,"short"],[mcq.id,"letter"],[vague.id,"short"]]);
+    expect(data.sources[created.body.id]).toContain("common difference");
+    expect(data.sources.course).toContain("Sequence notes");
+    return {answers:[
+      {id:vague.id,status:"needs_review",answer:"",reason:"Best is undefined without criteria."},
+      {id:"99999999-9999-4999-8999-999999999999",status:"answered",answer:"wrong question",reason:""},
+      {id:mcq.id,status:"answered",answer:"(b)",reason:""},
+      {id:blank.id,status:"answered",answer:"2",reason:""},
+    ]};
+  });
+  try {
+    const generate=(actor:string,questions:object[])=>request(app).post(base+"/baseline/answers").set(as(actor)).send({questions});
+    const batch=await generate("teacher",[blank,mcq,vague]);
+    expect(batch.status,JSON.stringify(batch.body)).toBe(200);
+    expect(batch.body.results).toEqual([
+      {id:blank.id,status:"answered",answer:"2",reason:""},
+      {id:mcq.id,status:"answered",answer:"B",reason:""},
+      {id:vague.id,status:"needs_review",answer:"",reason:"Best is undefined without criteria."},
+    ]);
+    expect(calls).toHaveLength(1);
+    // Generation never saves: the stored draft is unchanged.
+    const baseline=(await request(app).get(base+"/teacher").set(as("teacher"))).body.baseline;
+    expect(baseline.draft).toEqual(edited);
+    expect((await generate("student",[blank])).status).toBe(403);
+    expect((await generate("otherInstituteTeacher",[blank])).status).toBe(403);
+    expect((await generate("teacher",[{id:blank.id,prompt:" "}])).status).toBe(400);
+  } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+
+  await request(app).put(base+"/students").set(as("teacher")).send({name:"Answer Student",email:actors.student.email,dateOfBirth:"2005-01-02",enrolledOn:"2026-01-02"});
+  const onboarding=await request(app).get(base+"/student").set(as("student"));
+  expect(onboarding.body.questions.map((q:{prompt:string})=>q.prompt)).toEqual(edited.map(q=>q.prompt));
+  expect(JSON.stringify(onboarding.body)).not.toMatch(/"answer"|resourceId/);
+});

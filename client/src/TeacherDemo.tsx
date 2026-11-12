@@ -3,12 +3,14 @@ import { api, jsonBody } from "./api";
 import Markdown from "./Markdown";
 import MarkdownEditor from "./MarkdownEditor";
 import DemoTimetable from "./DemoTimetable";
+import { applySuggestions, baselineIssues } from "../../shared/baseline";
 import { ModePicker, originLabel, TeacherResourceCard, type Material } from "./TeacherResource";
 
 type Topic = {id:string;title:string};
 type Student = {email:string;name:string|null;dateOfBirth:string|null;enrolledOn:string|null};
 type Kind = "academic" | "preferences";
-type Question = {id:string;kind:Kind;prompt:string;answer:string};
+type Question = {id:string;kind:Kind;prompt:string;answer:string;resourceId?:string};
+type Suggestion = {status:"answered"|"needs_review";answer:string;reason:string};
 type Baseline = {draft:Question[];revision:number;published:boolean;draftVersion:number};
 type Course = {course:{title:string;description:string};topics:Topic[];resources:Material[];students:Student[];baseline:Baseline};
 type Task = (action:()=>Promise<void>)=>Promise<void>;
@@ -74,6 +76,12 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
   const [filter,setFilter]=useState("");
   const [selected,setSelected]=useState<Set<string>>(new Set());
   const [notice,setNotice]=useState("");
+  const [issues,setIssues]=useState<string[]>([]);
+  const [chosen,setChosen]=useState<Set<string>>(new Set());
+  const [suggestions,setSuggestions]=useState<Record<string,Suggestion>>({});
+  const [replaceExisting,setReplaceExisting]=useState(false);
+  const [answering,setAnswering]=useState(false);
+  const position=(id:string)=>questions.findIndex(q=>q.id===id)+1;
   const bankResources=resources.filter(r=>r.questions.some(q=>q.kind==="text") || r.summary.trim());
   async function persist(next:Question[],publish=false) {
     await api(base+"/baseline",{method:"PUT",body:jsonBody({questions:next,publish,draftVersion:baseline.draftVersion})});
@@ -94,9 +102,49 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
     });
   }
   function save(publish:boolean) {
-    void run(async()=>{await persist(questions,publish);setNotice(publish?"Baseline published.":"Baseline draft saved.");});
+    // Publish exactly what is in the editor now, including edits that were never saved separately.
+    const current=questions;
+    const problems=publish?baselineIssues(current):[];
+    setIssues(problems);setNotice("");
+    if (problems.length) return;
+    void run(async()=>{await persist(current,publish);setNotice(publish?"Baseline published.":"Baseline draft saved.");});
   }
-  const update=(id:string,patch:Partial<Question>)=>setQuestions(all=>all.map(x=>x.id===id?{...x,...patch}:x));
+  const update=(id:string,patch:Partial<Question>)=>{
+    setQuestions(all=>all.map(x=>x.id===id?{...x,...patch}:x));
+    if (issues.length) setIssues([]);
+  };
+  /** Generates expected answers from the current, possibly unsaved, editor values. Never saves or publishes. */
+  async function generateAnswers(ids:string[]) {
+    const targets=questions.filter(q=>ids.includes(q.id) && q.kind==="academic");
+    if (!targets.length) return;
+    const untitled=targets.filter(q=>!q.prompt.trim());
+    if (untitled.length) { setIssues([`Add question text to question ${untitled.map(q=>position(q.id)).join(", ")} before generating its answer.`]); return; }
+    setAnswering(true);setIssues([]);setNotice("");
+    try {
+      const results:({id:string}&Suggestion)[]=[];
+      for (let start=0;start<targets.length;start+=20) {
+        const batch=targets.slice(start,start+20);
+        const data=await api<{results:({id:string}&Suggestion)[]}>(base+"/baseline/answers",{method:"POST",body:jsonBody({
+          questions:batch.map(q=>({id:q.id,prompt:q.prompt,resourceId:q.resourceId,position:position(q.id)}))})});
+        results.push(...data.results.filter(r=>batch.some(q=>q.id===r.id)));
+      }
+      const merged=applySuggestions(questions,results,replaceExisting);
+      // Apply against the latest state so typing during generation is not lost.
+      setQuestions(all=>applySuggestions(all,results,replaceExisting).questions);
+      const label=(positions:number[])=>positions.map(p=>`question ${p}`).join(", ");
+      const filled=merged.filled, kept=merged.kept;
+      const review=merged.review.map(r=>`question ${r.position}${r.reason?` (${r.reason})`:""}`);
+      setSuggestions(old=>({...old,...Object.fromEntries(results.map(r=>[r.id,{status:r.status,answer:r.answer,reason:r.reason}]))}));
+      setNotice([filled.length?`Suggested answers filled in for ${label(filled)}. Review and edit them before publishing.`:"",
+        kept.length?`Existing answers kept for ${label(kept)}; use “Replace with suggestion” to switch.`:""].filter(Boolean).join(" ")||"No answers were generated.");
+      if (review.length) setIssues([`Still needs an answer: ${review.join("; ")}.`]);
+      setChosen(new Set());
+    } catch(e) {
+      setIssues([e instanceof Error?e.message:"Could not generate answers."]);
+    } finally { setAnswering(false); }
+  }
+  const academic=questions.filter(q=>q.kind==="academic");
+  const blankAcademic=academic.filter(q=>!q.answer.trim());
   return <section className="stack">
     <div className="row"><h3>Course onboarding</h3><span className="badge">{baseline.published?`Published · revision ${baseline.revision}`:"Draft"}</span></div>
     <div className="card-actions">
@@ -104,6 +152,7 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
       <button className="button small" aria-pressed={view==="questions"} onClick={()=>setView("questions")}>Baseline questions ({questions.length})</button>
     </div>
     {notice && <p className="notice success" role="status">{notice}</p>}
+    {issues.length>0 && <div className="notice error" role="alert">{issues.map((issue,i)=><div key={i}>{issue}</div>)}</div>}
     {view==="bank" && <>
       <label className="field">Resource<select value={filter} onChange={e=>setFilter(e.target.value)}><option value="">All processed resources</option>
         {bankResources.map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select></label>
@@ -112,7 +161,7 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
         <button className="button small primary" disabled={busy} onClick={()=>{
           const chosen=resources.flatMap(r=>r.questions).filter(q=>selected.has(q.id));
           setSelected(new Set());
-          addToDraft(chosen.map(q=>({id:crypto.randomUUID(),kind:"academic",prompt:q.prompt,answer:q.answer})),`${chosen.length} problem${chosen.length>1?"s":""} added to the baseline draft.`);
+          addToDraft(chosen.map(q=>({id:crypto.randomUUID(),kind:"academic",prompt:q.prompt,answer:q.answer,resourceId:q.resourceId})),`${chosen.length} problem${chosen.length>1?"s":""} added to the baseline draft.`);
         }}>Add selected to baseline</button>
         <button className="button small" onClick={()=>setSelected(new Set())}>Clear selection</button></div>}
       {bankResources.filter(r=>!filter || filter===r.id).map(r=><article className="resource-card stack" key={r.id}>
@@ -127,7 +176,7 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
             <span className="badge">{originLabel(problem)}</span>{problem.sourceRef && <span className="badge">Source: {problem.sourceRef}</span>}
             {problem.answerSource==="ai" && <span className="badge amber">AI-proposed answer</span>}</label>
           <Markdown text={problem.prompt}/>
-          <div className="card-actions"><button className="button small primary" disabled={busy} onClick={()=>addToDraft([{id:crypto.randomUUID(),kind:"academic",prompt:problem.prompt,answer:problem.answer}],"Problem added to the baseline draft.")}>Add to baseline</button>
+          <div className="card-actions"><button className="button small primary" disabled={busy} onClick={()=>addToDraft([{id:crypto.randomUUID(),kind:"academic",prompt:problem.prompt,answer:problem.answer,resourceId:r.id}],"Problem added to the baseline draft.")}>Add to baseline</button>
           <Generator label="Generate variants from this problem" busy={busy} onGenerate={(count,instructions)=>generate("academic",count,instructions,r.id,problem.id)}/></div>
         </div>)}
       </article>)}
@@ -138,14 +187,37 @@ function BaselineEditor({base,resources,baseline,busy,run,reload}:{base:string;r
         <option value="academic">Academic</option><option value="preferences">Learning preferences</option>
       </select></label><button className="button small" onClick={()=>setQuestions(q=>[...q,{id:crypto.randomUUID(),kind,prompt:"",answer:""}])}>Add custom question</button></div>
       {questions.length===0 && <p className="muted">Add problems from the bank, generate questions, or write your own. Include at least one academic and one learning preference question before publishing.</p>}
-      {questions.map((q,i)=><article className="course-card stack" key={q.id}>
-        <strong>{i+1}. {q.kind==="academic"?"Academic":"Learning preferences · open-ended, not scored"}</strong>
+      {academic.length>0 && <div className="card-actions sticky-actions" aria-label="Expected answer generation">
+        <span>{chosen.size} academic selected</span>
+        <button className="button small primary" disabled={busy || answering || !chosen.size} onClick={()=>void generateAnswers([...chosen])}>Generate answers for selected</button>
+        <button className="button small" disabled={busy || answering || !blankAcademic.length} onClick={()=>void generateAnswers(blankAcademic.map(q=>q.id))}>Generate all blank answers ({blankAcademic.length})</button>
+        <label className="select-row"><input type="checkbox" checked={replaceExisting} onChange={e=>setReplaceExisting(e.target.checked)}/> Replace existing answers</label>
+        {answering && <span role="status">Generating answers…</span>}
+      </div>}
+      {questions.map((q,i)=>{
+        const suggestion=suggestions[q.id];
+        return <article className="course-card stack" key={q.id}>
+        <div className="select-row">
+          {q.kind==="academic" && <input type="checkbox" aria-label={`Select question ${i+1}`} checked={chosen.has(q.id)} onChange={e=>setChosen(old=>{const next=new Set(old);if(e.target.checked)next.add(q.id);else next.delete(q.id);return next;})}/>}
+          <strong>{i+1}. {q.kind==="academic"?"Academic":"Learning preferences · open-ended, not scored"}</strong>
+        </div>
         <MarkdownEditor label="Question" value={q.prompt} maxLength={5000} rows={5} onChange={value=>update(q.id,{prompt:value})}/>
-        {q.kind==="academic" && <MarkdownEditor label="Expected answer" compact value={q.answer} maxLength={1500} rows={3} onChange={value=>update(q.id,{answer:value})}/>}
-        <div><button className="button small" onClick={()=>setQuestions(all=>all.filter(x=>x.id!==q.id))}>Remove question</button></div>
-      </article>)}
+        {q.kind==="academic" && <>
+          <MarkdownEditor label="Expected answer" compact value={q.answer} maxLength={1500} rows={3} onChange={value=>update(q.id,{answer:value})}/>
+          {suggestion?.status==="answered" && suggestion.answer===q.answer && <p className="muted">AI-suggested answer · edit it if needed.</p>}
+          {suggestion?.status==="answered" && suggestion.answer!==q.answer && q.answer.trim() && <div className="notice">
+            AI suggestion: <strong>{suggestion.answer}</strong>
+            <div className="card-actions"><button className="button small" onClick={()=>update(q.id,{answer:suggestion.answer})}>Replace with suggestion</button>
+              <button className="button small" onClick={()=>setSuggestions(old=>{const next={...old};delete next[q.id];return next;})}>Dismiss</button></div></div>}
+          {suggestion?.status==="needs_review" && !q.answer.trim() && <p className="notice warn">Needs teacher review: {suggestion.reason}</p>}
+        </>}
+        <div className="card-actions">
+          {q.kind==="academic" && <button className="button small" disabled={busy || answering} onClick={()=>void generateAnswers([q.id])}>Generate expected answer</button>}
+          <button className="button small" onClick={()=>setQuestions(all=>all.filter(x=>x.id!==q.id))}>Remove question</button>
+        </div>
+      </article>;})}
       <div className="card-actions"><button className="button small" disabled={busy} onClick={()=>save(false)}>Save draft</button>
-        <button className="button small primary" disabled={busy} onClick={()=>save(true)}>Publish baseline</button></div>
+        <button className="button small primary" disabled={busy || answering} onClick={()=>save(true)}>Publish baseline</button></div>
     </>}
   </section>;
 }

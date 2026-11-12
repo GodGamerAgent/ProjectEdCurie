@@ -4,11 +4,12 @@ import multer from "multer";
 import type { Pool } from "pg";
 import { cleanString, courseAccess, currentUser, NO_BASELINE, NO_RESOURCE, requireRole, teacherCourse, uuid } from "./access";
 import { HttpError } from "./auth";
-import { aiText, demoAI, generateOnboardingQuestions, object, transcribe } from "./demo-ai";
+import { aiText, demoAI, expectedAnswers, generateOnboardingQuestions, object, transcribe } from "./demo-ai";
+import { baselineIssues, isMultipleChoice } from "../shared/baseline";
 import { redact, runTests, type CodingSpec } from "./code-runner";
 import { QUESTION_FIELDS, studentQuestion } from "./routes-demo-questions";
 
-type Question = { id: string; kind: "academic" | "preferences"; prompt: string; answer: string };
+type Question = { id: string; kind: "academic" | "preferences"; prompt: string; answer: string; resourceId?: string };
 const attachments = multer({storage:multer.memoryStorage(),limits:{fileSize:4*1024*1024,files:2,fields:7}});
 const field = (value: unknown, label: string, max: number) => cleanString(value,label,max).replaceAll("\u0000","");
 const answerKey = (value: string) => value.trim().toLowerCase().replace(/\s+/g," ");
@@ -53,7 +54,45 @@ export function demoLearningRoutes(db: Pool) {
       ? "Create exactly the requested number of distinct academic onboarding questions grounded in the summary and optional original problem. Follow the teacher's instructions within that scope. Use self-contained multiple-choice questions with options A–D in prompt and a single correct letter as answer. Return {questions:[{prompt,answer}]}."
       : "Generate exactly the requested number of open-ended learning preference questions. Cover how the student prefers explanations (for example worked examples, visuals, analogies, step-by-step derivations, pace) and their study habits (for example when and how long they study, how they review, how they practise). They are unscored and have no right answer. Avoid mental health diagnosis, sensitive personal information, ability labels, or scoring. Follow teacher instructions within that scope. Return {questions:[{prompt}]}.",
     {count,instructions,basis},academic);
-    res.json({questions:questions.map(question=>({id:randomUUID(),kind,...question}))});
+    const resourceId=kind==="academic"?String(req.body.resourceId):undefined;
+    res.json({questions:questions.map(question=>({id:randomUUID(),kind,...question,...(resourceId?{resourceId}:{})}))});
+  });
+
+  router.post(base+"/baseline/answers",async(req,res)=>{
+    const courseId=String(req.params.courseId);
+    await teacherCourse(db,currentUser(res),courseId);
+    const input=req.body.questions;
+    if (!Array.isArray(input) || !input.length || input.length>20) throw new HttpError(400,"Choose 1 to 20 academic questions.");
+    const ids=new Set<string>();
+    const questions=input.map((value,index)=>{
+      const item=object(value);
+      const id=uuid(String(item.id));
+      if (ids.has(id)) throw new HttpError(400,"Questions must have distinct IDs.");
+      ids.add(id);
+      const prompt=typeof item.prompt==="string"?item.prompt.replaceAll("\u0000","").trim():"";
+      if (!prompt || prompt.length>5000) throw new HttpError(400,`Add question text (up to 5000 characters) to question ${Number(item.position)||index+1} before generating its answer.`);
+      return {id,prompt,resourceId:typeof item.resourceId==="string"?item.resourceId:undefined};
+    });
+    const resources=(await db.query(`SELECT id,title,summary,text FROM resources WHERE course_id=$1 AND status<>'archived' ORDER BY status='published' DESC,created_at`,[courseId])).rows as {id:string;title:string;summary:string;text:string}[];
+    const material=(r:{title:string;summary:string;text:string},max:number)=>`# ${r.title}\n\n${(r.summary.trim()||r.text).slice(0,max)}`;
+    const courseMaterial=resources.map(r=>material(r,2500)).join("\n\n").slice(0,8000);
+    const sources:Record<string,string>={};
+    const payload=questions.map(q=>{
+      const linked=resources.find(r=>r.id===q.resourceId);
+      const key=linked?linked.id:"course";
+      sources[key]??=linked?material(linked,7000):courseMaterial;
+      return {id:q.id,prompt:q.prompt,format:(isMultipleChoice(q.prompt)?"letter":"short") as "letter"|"short",source:key};
+    });
+    const generated=await expectedAnswers(db,{questions:payload,sources});
+    res.json({results:payload.map(q=>{
+      const result=generated.get(q.id);
+      if (!result) return {id:q.id,status:"needs_review",answer:"",reason:"The AI did not return an answer for this question."};
+      if (result.status==="needs_review") return {id:q.id,status:"needs_review",answer:"",reason:result.reason||"The question is ambiguous or lacks information."};
+      const answer=q.format==="letter"?result.answer.trim().toUpperCase().replace(/^\(?([A-D])\)?\.?$/,"$1"):result.answer.trim();
+      if (q.format==="letter" && !/^[A-D]$/.test(answer)) return {id:q.id,status:"needs_review",answer:"",reason:"The AI did not return a single option letter."};
+      if (!answer || answer.length>300) return {id:q.id,status:"needs_review",answer:"",reason:"The AI answer was empty or too long to grade."};
+      return {id:q.id,status:"answered",answer,reason:""};
+    })});
   });
 
   router.put(base+"/baseline",async(req,res)=>{
@@ -64,17 +103,22 @@ export function demoLearningRoutes(db: Pool) {
       throw new HttpError(400,"Provide up to 60 baseline questions.");
     }
     const ids=new Set<string>();
-    const draft:Question[]=questions.map(value=>{
+    const resourceIds=new Set((await db.query("SELECT id FROM resources WHERE course_id=$1 AND status<>'archived'",[courseId])).rows.map(r=>r.id as string));
+    const draft:Question[]=questions.map((value,index)=>{
       const item=object(value);
       const id=uuid(String(item.id));
       if (ids.has(id) || (item.kind!=="academic" && item.kind!=="preferences")) throw new HttpError(400,"Questions must have distinct IDs and a valid type.");
       ids.add(id);
       const answer=item.kind==="academic" && typeof item.answer==="string" ? item.answer.replaceAll("\u0000","").trim().slice(0,1500) : "";
-      return {id,kind:item.kind,prompt:field(item.prompt,"Question",5000),answer};
+      const prompt=typeof item.prompt==="string" ? item.prompt.replaceAll("\u0000","").trim() : "";
+      if (prompt.length>5000) throw new HttpError(400,`Question ${index+1} must be at most 5000 characters.`);
+      const resourceId=item.kind==="academic" && typeof item.resourceId==="string" && resourceIds.has(item.resourceId) ? item.resourceId : undefined;
+      return {id,kind:item.kind,prompt,answer,...(resourceId?{resourceId}:{})};
     });
-    if (publish && (!draft.some(q=>q.kind==="academic") || !draft.some(q=>q.kind==="preferences") || draft.some(q=>q.kind==="academic" && !q.answer))) {
-      throw new HttpError(400,"Include both question types and an expected answer for each academic question.");
-    }
+    const issues=baselineIssues(draft);
+    const blank=draft.findIndex(q=>!q.prompt);
+    if (!publish && blank>=0) throw new HttpError(400,`Add question text to question ${blank+1}.`);
+    if (publish && issues.length) throw new HttpError(400,issues.join(" "));
     if (publish && !(await db.query("SELECT 1 FROM resources WHERE course_id=$1 AND topic_id IS NOT NULL AND status='published' AND length(btrim(text))>0",[courseId])).rowCount) {
       throw new HttpError(400,"Publish a usable course resource before publishing the baseline.");
     }
