@@ -2,9 +2,9 @@
 
 Updated: 2026-11-12
 
-**Current checkpoint:** the learning loop includes immutable resource/question versions, source-grounded lessons, prerequisite diagnosis, focused practice, teacher-linked twins, attempt-based mastery, FSRS review, adaptive mocks, and assignments. Students can submit a written response, confidence, and self-diagnosis; teachers manually score the rubric and add a diagnosis/feedback. Assignment results stay separate from mastery. Schedules, private availability, feasibility, and deadline-preserving study plans work. Isolation tests pass; live Groq and real NST sign-in remain unverified. No fixtures were added to development or production.
+**Current checkpoint:** the learning loop includes immutable resource/question versions, source-grounded lessons, prerequisite diagnosis, focused practice, teacher-linked twins, FSRS review, adaptive mocks, and assignments. Students can submit written work and confidence; teachers manually review rubrics and return diagnosis/feedback. Teacher analytics summarize activity, evidence, assignment review, and schedule completion. Assignment and mock scores remain separate from mastery. Isolation tests pass; live Groq and NST sign-in remain unverified. No fixtures were added to development or production.
 
-**Next unfinished implementation task: teacher analytics.** Add evidence timelines and schedule completion views so teachers can review concept progress, assignment diagnosis, and learning activity.
+**Next unfinished implementation task: automatic schedule and curriculum recalibration.** Use missed sessions and new evidence to replan upcoming blocks while preserving deadlines and completed work.
 
 **Linked-twin manual walkthrough:** in the assigned teacher's course, create two distinct practice questions for the same concept, then use **Link an independent twin** to pair them. As an enrolled student with a completed baseline, submit the original, choose **Solve linked twin**, and answer without hints. Verify the independent count increases once. With another authorized student or fresh teacher-authored pair, request a hint on the twin and verify only assisted evidence increases. Refresh to verify **Resume linked twin** retains used hints. Use real accounts/material only; fixtures belong exclusively in `npm run test:isolated`.
 
@@ -48,19 +48,19 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | Resource extraction and durable storage | **Partial** | PDF/text upload and manual text recovery exist; extraction jobs, retries, archival, and content version history remain. |
 | Teacher timetable and class events | **Partial** | Teacher can add/cancel recurring weekly course events with IANA timezone/date range and date exceptions. Same-time same-course conflicts are checked; no one-off events, room/session metadata, or multiple sections yet. |
 | Student availability and commitments | **Partial** | Per-course weekly windows and private one-off absolute-time commitments persist. Availability intervals reject overlap; personal commitments remain private and the planner excludes them from session windows. |
-| Teacher analytics and error categories | **Partial** | Basic concept progress counts only; no detailed timeline, filters, or supported error taxonomy. |
+| Teacher analytics and error categories | **Partial** | Teacher view includes 7/30/90-day activity, distinct concept evidence, assignment review, and schedule completion summaries. Diagnosis remains teacher-entered; no custom filters, learner-level timelines, or validated error taxonomy yet. |
 | XP and leaderboard | **Not started** | No ledger or student opt-in leaderboard. |
 | Groq setup and reliability | **Partial** | The key has been supplied. Server-only access, bounded excerpt/citation validation, timeout, one transient retry, per-user rate cap and metadata exist. Optional `GROQ_MODEL` defaults to `qwen/qwen3.8-27b`. Live provider behavior is **not verified**; this twin workflow requires no AI calls. |
 | Consistency and authorization | **Partial** | Baseline sessions, practice, twin follow-ups, and comprehension answers persist and guard duplicate submissions; teacher/student scope and publication are checked on server. |
-| Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 16 tests). Tests cover learning evidence, source checks, schedule/privacy, feasibility/replanning, FSRS answer-first scheduling, adaptive mocks, and assignment publishing/submission/teacher correction/access boundaries. Provider responses are simulated; no live Groq call was made. |
-| Preview / direct development URL | **Passed** | Workflow restarted cleanly after the assignment migration; direct URL and Preview returned HTTP 200 and the public landing page rendered. Signed-in assignment and study screens need real NST accounts. |
+| Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 16 tests). Tests cover learning evidence, source checks, schedule/privacy, feasibility/replanning, FSRS answer-first scheduling, adaptive mocks, assignment publishing/review, and teacher analytics authorization and aggregation. Provider responses are simulated; no live Groq call was made. |
+| Preview / direct development URL | **Passed** | Workflow restarted after analytics changes; direct URL and Preview returned HTTP 200 and the public landing page rendered. Signed-in analytics and assignment screens need real NST accounts. |
 | Signed-in browser flow | **Pending owner verification** | With real NST teacher/student accounts, verify resource/baseline, lesson/practice/twin/review/mock, assignments and feedback, class schedule, and private availability. Do not use a test-login bypass. |
 
 ## Remaining implementation order
 
-1. Add teacher analytics for concept timelines, evidence quality, assignment diagnosis, and schedule completion.
+1. Trigger schedule/curriculum recalibration from missed work and new diagnostic evidence without changing deadlines.
 2. Add assignment imports, structured error diagnosis, and safe teacher-verified outcome integration.
-3. Trigger schedule/curriculum recalibration from missed work and new diagnostic evidence without changing deadlines.
+3. Expand analytics with learner timelines, custom filters, and validated error categories.
 4. Add XP/opt-in leaderboard, voice, break reminders, and finish remaining intake/personalization/tutor controls.
 5. Complete intake, goal milestones, curriculum adaptation, preference feedback, and tutor controls.
 6. Add XP, opt-in leaderboard, voice, active-time and break reminders.

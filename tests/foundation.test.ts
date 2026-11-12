@@ -502,6 +502,12 @@ describe("foundation access and onboarding", () => {
     expect(privateResult).toMatchObject({submissionStatus:"reviewed",score:86,teacherFeedback:"Your explanation is clear; check the units.",misconception:"Unit conversion"});
     expect((await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student")).send({response:"replace",confidence:5})).status).toBe(409);
     expect((await db.query("SELECT count(*) FROM study_attempts WHERE user_id=$1 AND course_id=$2 AND kind='practice'",[actors.student.id,course.id])).rows[0].count).toBe(baselineBefore);
+    const analytics=await request(app).get(`/api/courses/${course.id}/analytics?days=7`).set(as("teacher"));
+    expect(analytics.status).toBe(200);expect(analytics.body.students).toMatchObject({enrolled:1,active:0});
+    expect(analytics.body.assignments).toMatchObject({assignments:1,submissions:1,reviewed:1});
+    expect(analytics.body.activity).toHaveLength(7);
+    expect((await request(app).get(`/api/courses/${course.id}/analytics`).set(as("otherTeacher"))).status).toBe(403);
+    expect((await request(app).get(`/api/courses/${course.id}/analytics?days=3`).set(as("teacher"))).status).toBe(400);
   });
   it("keeps weekly timetable, student availability, and personal commitments correctly scoped", async()=>{
     const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated timetable"})).body;
