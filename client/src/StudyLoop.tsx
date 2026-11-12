@@ -5,6 +5,7 @@ import { StudentSchedule, TeacherTimetable } from "./Timetable";
 import { TeacherAssignments } from "./AssignmentPanels";
 import TeacherAnalytics from "./TeacherAnalytics";
 import MilestonesPanel from "./MilestonesPanel";
+import TutorConversation from "./TutorConversation";
 
 type Concept = { id: string; name: string; resourceId: string; prerequisites?: {id:string;name:string}[] };
 type Resource = { id: string | number; title: string };
@@ -256,6 +257,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
          {formatRecommendation&&<p className="muted">Your feedback suggests trying <strong>{formatRecommendation.format.replaceAll("_"," ")}</strong> next ({formatRecommendation.helpful}/{formatRecommendation.ratings} helpful ratings).</p>}
        </div><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
       {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p></div>}
+       <TutorConversation lessonId={lesson.id}/>
       <div aria-label="Lesson comprehension checks">{lesson.checks.map(check=><LessonCheckView key={check.id} lessonId={lesson.id} check={check} run={run}/>)}</div></div>}
     {history.map((item)=><div key={item.id} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span>
       {item.checks.map(check=><LessonCheckView key={check.id} lessonId={item.id} check={check} run={run}/>)}</div>)}

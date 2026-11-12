@@ -313,7 +313,13 @@ describe("foundation access and onboarding", () => {
     await request(app).post(`/api/courses/${id}/study-duration`).set(as("student")).send({eventKey:"123e4567-e89b-42d3-a456-426614174001",durationSeconds:600});
     vi.stubEnv("GROQ_API_KEY","isolated-test-key");
     try {
-      const provider=vi.fn(async(_url:string,options:RequestInit)=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({explanation:"Explanation",citations:[{resourceId:resource.body.id,location:"Page 1"}],checks:[{prompt:"What does the material say?",options:["One","Two","Three","Four"],correctOption:2,citations:[{resourceId:resource.body.id,location:"Page 1"}]}]})}}]}),{status:200,headers:{"Content-Type":"application/json"}}));
+      const provider=vi.fn(async(_url:string,options:RequestInit)=>{
+        const requestBody=JSON.parse(String(options.body)),prompt=JSON.parse(requestBody.messages[1].content);
+        const payload=typeof prompt.question==="string"
+          ?{answer:"The course source describes the motion.",citations:[{resourceId:resource.body.id,location:"Page 1"}]}
+          :{explanation:"Explanation",citations:[{resourceId:resource.body.id,location:"Page 1"}],checks:[{prompt:"What does the material say?",options:["One","Two","Three","Four"],correctOption:2,citations:[{resourceId:resource.body.id,location:"Page 1"}]}]};
+        return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(payload)}}],usage:{prompt_tokens:10,completion_tokens:5}}),{status:200,headers:{"Content-Type":"application/json"}});
+      });
       vi.stubGlobal("fetch",provider);
       const lesson=await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student"));
       expect(lesson.status).toBe(200); expect(lesson.body.citations[0].location).toBe("Page 1");
@@ -353,6 +359,12 @@ describe("foundation access and onboarding", () => {
       expect((await request(app).get(`/api/courses/${id}/format-recommendation`).set(as("student"))).body.recommendation)
         .toMatchObject({format:"analogy",ratings:2,helpful:2,helpfulPercent:100});
       expect((await request(app).post(`/api/lessons/${lesson.body.id}/feedback`).set(as("outsider")).send({helpful:true})).status).toBe(404);
+      const followup=await request(app).post(`/api/lessons/${lesson.body.id}/messages`).set(as("student")).send({message:"What does the source say about motion?"});
+      expect(followup.status).toBe(200);expect(followup.body.messages.map((m:any)=>m.role)).toEqual(["student","tutor"]);
+      expect(followup.body.messages[1]).toMatchObject({content:"The course source describes the motion.",citations:[{resourceId:resource.body.id,location:"Page 1"}]});
+      expect((await request(app).get(`/api/lessons/${lesson.body.id}/messages`).set(as("student"))).body.messages).toHaveLength(2);
+      expect((await request(app).get(`/api/lessons/${lesson.body.id}/messages`).set(as("teacher"))).status).toBe(403);
+      expect((await request(app).post(`/api/lessons/${lesson.body.id}/messages`).set(as("outsider")).send({message:"Explain"})).status).toBe(404);
       const unsupportedCheck=JSON.stringify({choices:[{message:{content:JSON.stringify({
         explanation:"Unsupported check",citations:[{resourceId:resource.body.id,location:"Page 1"}],
         checks:[{prompt:"Outside text?",options:["A","B","C","D"],correctOption:0,citations:[{resourceId:resource.body.id,location:"Page 99"}]}]

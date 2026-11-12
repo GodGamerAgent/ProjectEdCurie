@@ -218,6 +218,15 @@ export const lessonFeedback = pgTable("lesson_feedback",{
   createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
   updatedAt: timestamp("updated_at",{withTimezone:true}).defaultNow().notNull()
 },table=>[uniqueIndex("lesson_feedback_lesson_unique").on(table.lessonId)]);
+export const tutorMessages = pgTable("tutor_messages",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  lessonId: uuid("lesson_id").notNull().references(()=>tutorLessons.id),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  citations: jsonb("citations").$type<{resourceId:string;resourceVersionId:string;title:string;location:string}[]>().notNull().default([]),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+});
 export const lessonChecks = pgTable("lesson_checks", {
   id: uuid("id").defaultRandom().primaryKey(),
   lessonId: uuid("lesson_id").notNull().references(() => tutorLessons.id),
