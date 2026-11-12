@@ -46,8 +46,8 @@ export function TeacherStudy({ courseId, resources, assessments, concepts, refre
 export function StudentStudy({courseId,baselineReady}:{courseId:string|number;baselineReady:boolean}) {
   const [concepts,setConcepts]=useState<Concept[]>([]); const [evidence,setEvidence]=useState<Evidence[]>([]);
   const [selected,setSelected]=useState(""); const [goal,setGoal]=useState("");const [deadline,setDeadline]=useState("");const [availability,setAvailability]=useState("");
-  const [lesson,setLesson]=useState<{explanation:string;citations:{resourceId:string;title:string;location:string}[]}|null>(null);
-  const [history,setHistory]=useState<{explanation:string;citations:{resourceId:string;title:string;location:string}[]}[]>([]);
+  const [lesson,setLesson]=useState<{explanation:string;citations:{resourceId:string;resourceVersionId:string;title:string;location:string}[]}|null>(null);
+  const [history,setHistory]=useState<{explanation:string;citations:{resourceId:string;resourceVersionId?:string;title:string;location:string}[]}[]>([]);
   const [session,setSession]=useState<{sessionId:string;prompt:string;concept?:string}|null>(null); const [answer,setAnswer]=useState(""); const [hints,setHints]=useState<string[]>([]);
   const [result,setResult]=useState("");const [walkthrough,setWalkthrough]=useState("");const [error,setError]=useState("");const [notice,setNotice]=useState("");const [busy,setBusy]=useState(false);
   const [format,setFormat]=useState("direct");const [source,setSource]=useState<{resourceId:string;location:string;text:string}|null>(null);
@@ -74,7 +74,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     </div>
     <div className="field" style={{marginTop:14}}><label htmlFor="lesson-format">Explanation style</label><select id="lesson-format" value={format} onChange={(e)=>setFormat(e.target.value)}><option value="direct">Direct explanation</option><option value="intuition">Build intuition</option><option value="analogy">Use an analogy</option><option value="formal">Formal reasoning</option><option value="code_trace">Trace code</option></select></div>
     {!baselineReady&&<p className="muted">Complete the course baseline to unlock lessons and practice. Your goal and availability can be saved now.</p>}
-    {lesson && <div style={{marginTop:16}}><p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
+    {lesson && <div style={{marginTop:16}}><p style={{whiteSpace:"pre-wrap"}}>{lesson.explanation}</p><strong>Sources</strong><ul>{lesson.citations.map((c,i)=><li key={i}>{c.title} · {c.location} <button className="button small" type="button" onClick={()=>void run(async()=>{const data=await api<{text:string;location:string}>(`/api/resources/${c.resourceId}/excerpt?version=${c.resourceVersionId}&location=${encodeURIComponent(c.location)}`);setSource({resourceId:c.resourceId,location:data.location,text:data.text});})}>Open source section</button></li>)}</ul>
       {source&&<div className="notice" role="region" aria-label="Source excerpt"><strong>{source.location}</strong><p style={{whiteSpace:"pre-wrap"}}>{source.text}</p></div>}</div>}
     {history.map((item,i)=><div key={i} className="notice" style={{marginTop:12}}><p style={{whiteSpace:"pre-wrap"}}>{item.explanation}</p><span>{item.citations.map((c)=>`${c.title} · ${c.location}`).join(", ")}</span></div>)}
       {session && <div style={{marginTop:18}}><h3>{session.concept ? `Prerequisite check: ${session.concept}` : "Teacher-approved practice"}</h3><p>{session.prompt}</p>

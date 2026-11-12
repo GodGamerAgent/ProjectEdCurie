@@ -53,8 +53,23 @@ export const resources = pgTable("resources", {
   fileName: text("file_name"),
   mimeType: text("mime_type"),
   fileData: bytes("file_data"),
+  version: integer("version").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
+export const resourceVersions = pgTable("resource_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  resourceId: uuid("resource_id").notNull().references(() => resources.id),
+  version: integer("version").notNull(),
+  title: text("title").notNull(),
+  text: text("text").notNull(),
+  status: text("status").notNull(),
+  extractionStatus: text("extraction_status").notNull(),
+  fileName: text("file_name"),
+  mimeType: text("mime_type"),
+  fileData: bytes("file_data"),
+  createdBy: uuid("created_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+}, (table) => [uniqueIndex("resource_versions_resource_version_unique").on(table.resourceId,table.version)]);
 export const concepts = pgTable("concepts", {
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(() => courses.id),
@@ -79,8 +94,21 @@ export const questions = pgTable("questions", {
   resourceId: uuid("resource_id").notNull().references(() => resources.id),
   prompt: text("prompt").notNull(),
   answer: text("answer").notNull(),
-  conceptId: uuid("concept_id").references(() => concepts.id)
+  conceptId: uuid("concept_id").references(() => concepts.id),
+  version: integer("version").notNull().default(1),
+  resourceVersionId: uuid("resource_version_id").references(() => resourceVersions.id)
 });
+export const questionVersions = pgTable("question_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  questionId: uuid("question_id").notNull().references(() => questions.id),
+  version: integer("version").notNull(),
+  prompt: text("prompt").notNull(),
+  answer: text("answer").notNull(),
+  resourceVersionId: uuid("resource_version_id").references(() => resourceVersions.id),
+  conceptId: uuid("concept_id").references(() => concepts.id),
+  createdBy: uuid("created_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+}, (table) => [uniqueIndex("question_versions_question_version_unique").on(table.questionId,table.version)]);
 export const preferences = pgTable("student_preferences", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   availability: text("availability").notNull().default(""),
@@ -122,6 +150,7 @@ export const practiceProblems = pgTable("practice_problems", {
   id: uuid("id").defaultRandom().primaryKey(),
   conceptId: uuid("concept_id").notNull().references(() => concepts.id),
   questionId: uuid("question_id").notNull().references(() => questions.id),
+  questionVersionId: uuid("question_version_id").references(() => questionVersions.id),
   prompt: text("prompt").notNull(),
   answer: text("answer").notNull(),
   hints: jsonb("hints").$type<string[]>().notNull(),
@@ -151,6 +180,7 @@ export const tutorLessons = pgTable("tutor_lessons", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id),
   conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  resourceVersionId: uuid("resource_version_id").references(() => resourceVersions.id),
   explanation: text("explanation").notNull(),
   citations: jsonb("citations").$type<{resourceId:string;title:string;location:string}[]>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()

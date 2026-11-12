@@ -31,12 +31,12 @@ export function courseRoutes(db: Pool) {
   router.get("/api/courses/:id", async (req, res) => {
     const user = currentUser(res);
     const { course, teacher } = await courseAccess(db, user, req.params.id);
-    const resources = await db.query(`SELECT id,title,status,extraction_status AS "extractionStatus",text,(file_data IS NOT NULL) AS "hasFile"
+    const resources = await db.query(`SELECT id,title,status,extraction_status AS "extractionStatus",text,version,(file_data IS NOT NULL) AS "hasFile"
       FROM resources WHERE course_id=$1 ${teacher ? "" : "AND status='published' AND length(btrim(text))>0"} ORDER BY created_at`, [course.id]);
     const assessments = await db.query(`SELECT id,title,status FROM assessments WHERE course_id=$1 ${teacher ? "" : "AND status='published'"} ORDER BY created_at`, [course.id]);
     const enriched = [];
     for (const a of assessments.rows) {
-      const q = teacher ? await db.query("SELECT id,prompt,answer,resource_id AS \"resourceId\",concept_id AS \"conceptId\" FROM questions WHERE assessment_id=$1 ORDER BY id", [a.id]) : { rows: [] };
+      const q = teacher ? await db.query("SELECT id,prompt,answer,version,resource_id AS \"resourceId\",resource_version_id AS \"resourceVersionId\",concept_id AS \"conceptId\" FROM questions WHERE assessment_id=$1 ORDER BY id", [a.id]) : { rows: [] };
       enriched.push({ ...a, questions: q.rows });
     }
     const enrollments = teacher ? await db.query("SELECT email FROM enrollments WHERE course_id=$1 ORDER BY email", [course.id]) : { rows: [] };
@@ -64,12 +64,14 @@ export function courseRoutes(db: Pool) {
     if (active.rowCount) return res.json({sessionId:active.rows[0].id,questions:active.rows[0].questions.map(({id,prompt}:any)=>({id,prompt})),answers:active.rows[0].answers});
     const gate = await eligibility(db, req.params.id);
     if (!gate.assessmentId) throw new HttpError(403, gate.message);
-    const questions = await db.query(`SELECT q.id,q.prompt,q.answer,q.concept_id FROM questions q JOIN resources r ON r.id=q.resource_id
+    const questions = await db.query(`SELECT q.id,q.prompt,q.answer,q.concept_id,q.version,q.resource_version_id FROM questions q JOIN resources r ON r.id=q.resource_id
+      JOIN resource_versions rv ON rv.id=q.resource_version_id AND rv.resource_id=r.id
       WHERE q.assessment_id=$1 AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0
+      AND rv.status='published' AND length(btrim(rv.text))>0
       AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0 ORDER BY q.id`, [gate.assessmentId, req.params.id]);
     if (!questions.rowCount) throw new HttpError(403,gate.message);
     const session=await db.query(`INSERT INTO assessment_sessions (user_id,course_id,assessment_id,questions)
-      VALUES ($1,$2,$3,$4::jsonb) RETURNING id`,[user.id,req.params.id,gate.assessmentId,JSON.stringify(questions.rows.map((q)=>({id:q.id,prompt:q.prompt,answer:q.answer,conceptId:q.concept_id})))]);
+      VALUES ($1,$2,$3,$4::jsonb) RETURNING id`,[user.id,req.params.id,gate.assessmentId,JSON.stringify(questions.rows.map((q)=>({id:q.id,prompt:q.prompt,answer:q.answer,conceptId:q.concept_id,questionVersion:q.version,resourceVersionId:q.resource_version_id})))]);
     res.json({sessionId:session.rows[0].id,questions:questions.rows.map(({id,prompt})=>({id,prompt})),answers:{}});
   });
   router.put("/api/assessment-sessions/:id/answers", async (req,res)=>{
@@ -99,7 +101,7 @@ export function courseRoutes(db: Pool) {
       throw new HttpError(400, "Answer every available question before submitting.");
     }
     const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
-    const details: { questionId: string; conceptId: string | null; correct: boolean }[] = questions.rows.map((q:any) => ({ questionId: q.id, conceptId: q.conceptId, correct: normalize(answers[q.id]) === normalize(q.answer) }));
+    const details: { questionId: string; questionVersion:number; resourceVersionId:string|null; conceptId: string | null; correct: boolean }[] = questions.rows.map((q:any) => ({ questionId: q.id,questionVersion:q.questionVersion,resourceVersionId:q.resourceVersionId, conceptId: q.conceptId, correct: normalize(answers[q.id]) === normalize(q.answer) }));
     const score = details.filter((q) => q.correct).length;
     const client = await db.connect();
     try {

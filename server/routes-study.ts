@@ -18,7 +18,7 @@ async function studentReady(db: Pool, user: ReturnType<typeof currentUser>, cour
     WHERE b.user_id=$1 AND a.course_id=$2 AND b.score IS NOT NULL LIMIT 1`, [user.id, courseId]);
   if (!baseline.rowCount) throw new HttpError(403, "Complete your baseline assessment before starting this concept.");
 }
-type Excerpt = { resourceId: string; title: string; location: string; text: string };
+type Excerpt = { resourceId: string; resourceVersionId: string; title: string; location: string; text: string };
 export async function groqLesson(name: string, excerpts: Excerpt[], preferences: unknown, signal?: AbortSignal) {
   if (!process.env.GROQ_API_KEY) throw new HttpError(503, "Tutoring is unavailable. Ask an administrator to add GROQ_API_KEY in Replit Secrets.");
   const model=process.env.GROQ_MODEL?.trim()||"qwen/qwen3.8-27b";
@@ -58,7 +58,7 @@ export async function groqLesson(name: string, excerpts: Excerpt[], preferences:
   }
   return { explanation: parsed.explanation.trim(), usage:data.usage ?? {}, citations: parsed.citations.map((c: any) => {
     const source = excerpts.find((x) => x.resourceId === c.resourceId && x.location === c.location)!;
-    return { resourceId: source.resourceId, title: source.title, location: source.location };
+    return { resourceId: source.resourceId,resourceVersionId:source.resourceVersionId, title: source.title, location: source.location };
   }) };
 }
 
@@ -113,21 +113,22 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   router.post("/api/concepts/:id/problems", async (req, res) => {
     const c=await concept(db,req.params.id); await teacherCourse(db,currentUser(res),c.course_id);
     const questionId=uuid(cleanString(req.body.questionId,"Baseline question",36));
-    const question=await db.query(`SELECT 1 FROM questions q JOIN assessments a ON a.id=q.assessment_id
-      WHERE q.id=$1 AND q.concept_id=$2 AND a.course_id=$3`,[questionId,c.id,c.course_id]);
+    const question=await db.query(`SELECT qv.id AS "questionVersionId" FROM questions q JOIN assessments a ON a.id=q.assessment_id
+      JOIN question_versions qv ON qv.question_id=q.id AND qv.version=q.version WHERE q.id=$1 AND q.concept_id=$2 AND a.course_id=$3`,[questionId,c.id,c.course_id]);
     if (!question.rowCount) throw new HttpError(400,"Choose a baseline question linked to this concept.");
     const prompt=cleanString(req.body.prompt,"Twin problem",5000), answer=cleanString(req.body.answer,"Expected answer",5000);
     if (!Array.isArray(req.body.hints) || req.body.hints.length !== 3) throw new HttpError(400,"Provide three progressive hints.");
     const hints=req.body.hints.map((x: unknown)=>cleanString(x,"Hint",1000));
-    const result=await db.query("INSERT INTO practice_problems (concept_id,question_id,prompt,answer,hints) VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING id,prompt",[c.id,questionId,prompt,answer,JSON.stringify(hints)]);
+    const result=await db.query("INSERT INTO practice_problems (concept_id,question_id,question_version_id,prompt,answer,hints) VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING id,prompt",[c.id,questionId,question.rows[0].questionVersionId,prompt,answer,JSON.stringify(hints)]);
     res.status(201).json(result.rows[0]);
   });
   router.post("/api/concepts/:id/lesson", async (req, res) => {
     const c=await concept(db,req.params.id); const user=currentUser(res); await studentReady(db,user,c.course_id);
-    const resource=await db.query("SELECT id,title,text FROM resources WHERE id=$1 AND course_id=$2 AND status='published' AND length(btrim(text))>0",[c.resource_id,c.course_id]);
+    const resource=await db.query(`SELECT r.id,rv.id AS "resourceVersionId",rv.title,rv.text FROM resources r JOIN resource_versions rv ON rv.resource_id=r.id AND rv.version=r.version
+      WHERE r.id=$1 AND r.course_id=$2 AND r.status='published' AND rv.status='published' AND length(btrim(rv.text))>0`,[c.resource_id,c.course_id]);
     if (!resource.rowCount) throw new HttpError(400,"This concept needs published, usable course material. Ask your teacher to publish it.");
     const row=resource.rows[0], parts=String(row.text).split(/(?=\[Page \d+\])/).filter((x)=>x.trim()).slice(0,4);
-    const excerpts:Excerpt[]=parts.map((part)=>({resourceId:row.id,title:row.title,location:part.match(/^\[Page (\d+)\]/)?.[1] ? `Page ${part.match(/^\[Page (\d+)\]/)![1]}` : "Section 1",text:part.slice(0,4000)}));
+    const excerpts:Excerpt[]=parts.map((part)=>({resourceId:row.id,resourceVersionId:row.resourceVersionId,title:row.title,location:part.match(/^\[Page (\d+)\]/)?.[1] ? `Page ${part.match(/^\[Page (\d+)\]/)![1]}` : "Section 1",text:part.slice(0,4000)}));
     const pref=await db.query("SELECT feedback,hints,formats FROM student_preferences WHERE user_id=$1",[user.id]);
     const requestedFormat=typeof req.body?.format==="string"?req.body.format:"direct";
     if(!["direct","intuition","analogy","formal","code_trace"].includes(requestedFormat))throw new HttpError(400,"Choose a supported explanation format.");
@@ -147,7 +148,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     try{
       const generated=await lesson(c.name,excerpts,{...(pref.rows[0] ?? {}),requestedFormat},controller.signal);
       const elapsed=Math.round(performance.now()-started);
-      await db.query("INSERT INTO tutor_lessons (user_id,concept_id,explanation,citations) VALUES ($1,$2,$3,$4::jsonb)",[user.id,c.id,generated.explanation,JSON.stringify(generated.citations)]);
+      await db.query("INSERT INTO tutor_lessons (user_id,concept_id,resource_version_id,explanation,citations) VALUES ($1,$2,$3,$4,$5::jsonb)",[user.id,c.id,generated.citations[0]?.resourceVersionId??row.resourceVersionId,generated.explanation,JSON.stringify(generated.citations)]);
       const usage=(generated as any).usage ?? {};
       await db.query("UPDATE ai_generations SET status='succeeded',duration_ms=$2,input_tokens=$3,output_tokens=$4 WHERE id=$1",[generationId,elapsed,Number.isInteger(usage.prompt_tokens)?usage.prompt_tokens:null,Number.isInteger(usage.completion_tokens)?usage.completion_tokens:null]);
       res.json({explanation:generated.explanation,citations:generated.citations,generationId});
@@ -159,15 +160,17 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   });
   router.get("/api/concepts/:id/lessons", async (req,res)=>{
     const c=await concept(db,req.params.id), user=currentUser(res); await studentReady(db,user,c.course_id);
-    const available=await db.query("SELECT 1 FROM resources WHERE id=$1 AND course_id=$2 AND status='published' AND length(btrim(text))>0",[c.resource_id,c.course_id]);
-    if (!available.rowCount) throw new HttpError(403,"The source material is no longer available.");
-    const result=await db.query('SELECT explanation,citations,created_at AS "createdAt" FROM tutor_lessons WHERE user_id=$1 AND concept_id=$2 ORDER BY created_at DESC LIMIT 20',[user.id,c.id]);
+    const result=await db.query(`SELECT tl.explanation,tl.citations,tl.created_at AS "createdAt" FROM tutor_lessons tl
+      JOIN resource_versions rv ON rv.id=tl.resource_version_id AND rv.status='published'
+      WHERE tl.user_id=$1 AND tl.concept_id=$2 ORDER BY tl.created_at DESC LIMIT 20`,[user.id,c.id]);
     res.json({lessons:result.rows});
   });
   router.post("/api/concepts/:id/practice", async (req,res)=>{
     const c=await concept(db,req.params.id), user=currentUser(res); await studentReady(db,user,c.course_id);
     const problem=await db.query(`SELECT p.id,p.prompt FROM practice_problems p JOIN questions q ON q.id=p.question_id JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id
-      WHERE p.concept_id=$1 AND q.concept_id=$1 AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0
+      JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id JOIN resource_versions rv ON rv.id=qv.resource_version_id AND rv.resource_id=r.id
+      WHERE p.concept_id=$1 AND qv.concept_id=$1 AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published'
+      AND rv.status='published' AND length(btrim(rv.text))>0
       AND NOT EXISTS (SELECT 1 FROM practice_sessions used WHERE used.problem_id=p.id AND used.user_id=$3 AND used.submitted=true)
       ORDER BY p.created_at LIMIT 1`,[c.id,c.course_id,user.id]);
     if (!problem.rowCount) throw new HttpError(400,"No teacher-approved practice problem is available for this concept yet.");
@@ -177,9 +180,10 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   router.post("/api/practice/:id/hint", async (req,res)=>{
     const user=currentUser(res); requireRole(user,"student");
     const row=await db.query(`SELECT s.*,c.course_id,p.hints FROM practice_sessions s JOIN practice_problems p ON p.id=s.problem_id JOIN concepts c ON c.id=p.concept_id
-      JOIN questions q ON q.id=p.question_id AND q.concept_id=c.id JOIN assessments a ON a.id=q.assessment_id AND a.course_id=c.course_id
-      JOIN resources r ON r.id=q.resource_id AND r.course_id=c.course_id
-      WHERE s.id=$1 AND s.user_id=$2 AND a.status='published' AND r.status='published' AND length(btrim(r.text))>0`,[uuid(req.params.id),user.id]);
+      JOIN questions q ON q.id=p.question_id JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id AND qv.concept_id=c.id
+      JOIN assessments a ON a.id=q.assessment_id AND a.course_id=c.course_id JOIN resources r ON r.id=q.resource_id AND r.course_id=c.course_id
+      JOIN resource_versions rv ON rv.id=qv.resource_version_id AND rv.resource_id=r.id
+      WHERE s.id=$1 AND s.user_id=$2 AND a.status='published' AND r.status='published' AND rv.status='published' AND length(btrim(rv.text))>0`,[uuid(req.params.id),user.id]);
     if (!row.rowCount) throw new HttpError(404,"Practice session not found.");
     const s=row.rows[0]; await studentReady(db,user,s.course_id);
     if (s.submitted || s.kind!=="practice") throw new HttpError(400,"Hints are not available for this session.");
@@ -191,9 +195,10 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     const user=currentUser(res); requireRole(user,"student"); const answer=cleanString(req.body.answer,"Answer",5000);
     const found=await db.query(`SELECT s.id,s.kind,s.submitted,s.hint_count,p.answer,p.concept_id,c.course_id FROM practice_sessions s
       JOIN practice_problems p ON p.id=s.problem_id JOIN concepts c ON c.id=p.concept_id
-      JOIN questions q ON q.id=p.question_id AND q.concept_id=c.id JOIN assessments a ON a.id=q.assessment_id AND a.course_id=c.course_id
-      JOIN resources r ON r.id=q.resource_id AND r.course_id=c.course_id
-      WHERE s.id=$1 AND s.user_id=$2 AND a.status='published' AND r.status='published' AND length(btrim(r.text))>0`,[uuid(req.params.id),user.id]);
+      JOIN questions q ON q.id=p.question_id JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id AND qv.concept_id=c.id
+      JOIN assessments a ON a.id=q.assessment_id AND a.course_id=c.course_id JOIN resources r ON r.id=q.resource_id AND r.course_id=c.course_id
+      JOIN resource_versions rv ON rv.id=qv.resource_version_id AND rv.resource_id=r.id
+      WHERE s.id=$1 AND s.user_id=$2 AND a.status='published' AND r.status='published' AND rv.status='published' AND length(btrim(rv.text))>0`,[uuid(req.params.id),user.id]);
     if (!found.rowCount) throw new HttpError(404,"Practice session not found.");
     const s=found.rows[0]; await studentReady(db,user,s.course_id);
     const correct=normalize(answer)===normalize(s.answer); const client=await db.connect();
@@ -205,8 +210,10 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
       await client.query("INSERT INTO study_attempts (user_id,course_id,concept_id,session_id,kind,correct,assisted) VALUES ($1,$2,$3,$4,$5,$6,$7)",[user.id,s.course_id,s.concept_id,s.id,s.kind,correct,assisted]);
       let diagnostic=null;
       if (!correct && s.kind==="practice") {
-        const p=await client.query(`SELECT p.id,p.prompt,c.name FROM concept_prerequisites cp JOIN concepts c ON c.id=cp.prerequisite_id JOIN practice_problems p ON p.concept_id=c.id JOIN questions q ON q.id=p.question_id JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id
-          WHERE cp.concept_id=$1 AND c.course_id=$2 AND q.concept_id=c.id AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0 ORDER BY p.created_at LIMIT 1`,[s.concept_id,s.course_id]);
+        const p=await client.query(`SELECT p.id,p.prompt,c.name FROM concept_prerequisites cp JOIN concepts c ON c.id=cp.prerequisite_id JOIN practice_problems p ON p.concept_id=c.id
+          JOIN questions q ON q.id=p.question_id JOIN question_versions qv ON qv.id=p.question_version_id AND qv.question_id=q.id AND qv.concept_id=c.id
+          JOIN assessments a ON a.id=q.assessment_id JOIN resources r ON r.id=q.resource_id JOIN resource_versions rv ON rv.id=qv.resource_version_id
+          WHERE cp.concept_id=$1 AND c.course_id=$2 AND a.course_id=$2 AND a.status='published' AND r.course_id=$2 AND r.status='published' AND rv.status='published' AND length(btrim(rv.text))>0 ORDER BY p.created_at LIMIT 1`,[s.concept_id,s.course_id]);
         if (p.rowCount) { const d=await client.query("INSERT INTO practice_sessions (user_id,problem_id,kind) VALUES ($1,$2,'diagnostic') RETURNING id",[user.id,p.rows[0].id]); diagnostic={sessionId:d.rows[0].id,prompt:p.rows[0].prompt,concept:p.rows[0].name}; }
       }
       await client.query("COMMIT");

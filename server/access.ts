@@ -48,8 +48,10 @@ export async function eligibility(db: Pool, courseId: string) {
     `SELECT a.id FROM assessments a
      WHERE a.course_id=$1 AND a.status='published'
        AND EXISTS (SELECT 1 FROM questions q JOIN resources r ON r.id=q.resource_id
+          JOIN resource_versions rv ON rv.id=q.resource_version_id AND rv.resource_id=r.id
          WHERE q.assessment_id=a.id AND r.course_id=a.course_id AND r.status='published'
-           AND length(btrim(r.text))>0 AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0)
+            AND length(btrim(r.text))>0 AND rv.status='published' AND length(btrim(rv.text))>0
+            AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0)
      ORDER BY a.created_at LIMIT 1`, [courseId]);
   if (!baseline.rowCount) return { state: "no_baseline", message: NO_BASELINE, assessmentId: null };
   return { state: "ready", message: "Your baseline assessment is ready.", assessmentId: baseline.rows[0].id as string };

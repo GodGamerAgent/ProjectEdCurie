@@ -20,8 +20,8 @@ type Config = { authEnabled: boolean };
 type InstituteBrand = { id: string; displayName: string; hasLogo: boolean };
 type Person = { id: string; email: string; role: "admin" | "teacher" | "student" | string; institute: InstituteBrand | null };
 type Course = { id: string | number; title: string; description: string; role?: string };
-type Resource = { id: string | number; title: string; status: string; extractionStatus?: string; text?: string; hasFile: boolean };
-type Question = { id: string | number; prompt: string; answer?: string; resourceId?: string | number; conceptId?: string | null };
+type Resource = { id: string | number; title: string; status: string; extractionStatus?: string; text?: string; hasFile: boolean; version?:number };
+type Question = { id: string | number; prompt: string; answer?: string; resourceId?: string | number; conceptId?: string | null; version?:number };
 type Assessment = { id: string | number; title: string; status: string; questions: Question[] };
 type CourseDetail = { course: Course; resources: Resource[]; assessments: Assessment[]; enrollments: { email: string }[]; concepts: { id: string; name: string; resourceId: string }[] };
 type Preferences = { availability: string; feedback: string; hints: string; formats: string[] };
@@ -259,7 +259,7 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
       <div className="field"><button className="button primary" disabled={busy}>Save resource draft</button></div>
     </form>
     <div className="stack" style={{ marginTop: 17 }}>
-      {detail.resources.length ? detail.resources.map((resource) => <ResourceEditor key={resource.id} resource={resource} busy={busy} onEdit={(titleValue, text) => run(() => api(`/api/resources/${resource.id}`, { method: "PATCH", body: jsonBody({ title: titleValue, text }) }), "Resource draft updated.")} onPublish={() => run(() => api(`/api/resources/${resource.id}/publish`, { method: "POST" }), "Resource published.")} />) : <div className="empty"><span className="empty-mark">02</span><h3>No course resources</h3><p>Course materials added above will be listed here for review.</p></div>}
+      {detail.resources.length ? detail.resources.map((resource) => <ResourceEditor key={resource.id} resource={resource} busy={busy} onEdit={(titleValue, text) => run(() => api(`/api/resources/${resource.id}`, { method: "PATCH", body: jsonBody({ title: titleValue, text }) }), "A new resource version was saved as a draft.")} onPublish={() => run(() => api(`/api/resources/${resource.id}/publish`, { method: "POST" }), "Resource published.")} onArchive={()=>{if(window.confirm("Archive this resource? Students will no longer start new work from it."))void run(()=>api(`/api/resources/${resource.id}/archive`,{method:"POST"}),"Resource archived.");}} />) : <div className="empty"><span className="empty-mark">02</span><h3>No course resources</h3><p>Course materials added above will be listed here for review.</p></div>}
     </div>
     <div className="divider" />
     <h3>Baseline assessment</h3><p className="muted">Create questions tied to resources, then publish the assessment when it is ready.</p>
@@ -272,7 +272,7 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
           <div className="row"><div><h3>{assessment.title}</h3><span className={`badge ${assessment.status.toLowerCase() === "published" ? "green" : "amber"}`}>{assessment.status}</span></div>
             {assessment.status.toLowerCase() !== "published" && <button className="button small success" disabled={busy} onClick={() => void run(() => api(`/api/assessments/${assessment.id}/publish`, { method: "POST" }), "Assessment published.")}>Publish assessment</button>}
           </div>
-          {assessment.questions.length ? <div className="question-list" style={{ marginTop: 14 }}>{assessment.questions.map((q) => <div className="question" key={q.id}><strong>{q.prompt}</strong><p>{q.answer}</p><span className="badge">Source: {detailResource(q.resourceId || "")?.title || "Not linked"}</span></div>)}</div> : <div className="empty" style={{ marginTop: 14 }}><span className="empty-mark">Q</span><h3>No questions yet</h3><p>Add questions based on a published or draft resource.</p></div>}
+          {assessment.questions.length ? <div className="question-list" style={{ marginTop: 14 }}>{assessment.questions.map((q) => <QuestionEditor key={q.id} question={q} resources={detail.resources} concepts={detail.concepts} busy={busy} onSave={(data)=>run(()=>api(`/api/questions/${q.id}`,{method:"PATCH",body:jsonBody(data)}),"A new question version was saved.")}/>)}</div> : <div className="empty" style={{ marginTop: 14 }}><span className="empty-mark">Q</span><h3>No questions yet</h3><p>Add questions based on a published or draft resource.</p></div>}
           {assessment.status.toLowerCase() !== "published" && <form className="form-grid" style={{ marginTop: 14 }} onSubmit={(event) => {
             event.preventDefault();
             if (!draft.resourceId) { setError("Select a source resource for this question."); return; }
@@ -294,20 +294,49 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
   </div>;
 }
 
-function ResourceEditor({ resource, busy, onEdit, onPublish }: { resource: Resource; busy: boolean; onEdit: (title: string, text: string) => void; onPublish: () => void }) {
+function ResourceEditor({ resource, busy, onEdit, onPublish,onArchive }: { resource: Resource; busy: boolean; onEdit: (title: string, text: string) => void; onPublish: () => void;onArchive:()=>void }) {
   const [title, setTitle] = useState(resource.title);
   const [text, setText] = useState(resource.text || "");
+  const [versions,setVersions]=useState<{id:string;version:number;title:string;status:string;createdAt:string}[]>([]);
+  const [preview,setPreview]=useState<{title:string;version:number;text:string}|null>(null);
+  const [versionError,setVersionError]=useState("");
   const published = resource.status.toLowerCase() === "published";
   useEffect(() => { setTitle(resource.title); setText(resource.text || ""); }, [resource.title, resource.text]);
+  async function loadVersions(){setVersionError("");try{const data=await api<{versions:typeof versions}>(`/api/resources/${resource.id}/versions`);setVersions(data.versions);}catch(e){setVersionError(e instanceof Error?e.message:"Could not load version history.");}}
+  async function openVersion(version:{id:string;version:number;title:string}){setVersionError("");try{const data=await api<{text:string;location:string}>(`/api/resources/${resource.id}/excerpt?version=${version.id}&location=Section%201`);setPreview({title:version.title,version:version.version,text:data.text});}catch(e){setVersionError(e instanceof Error?e.message:"Could not open this version.");}}
   return <article className="resource-card">
-    <div className="row"><div><h3>{resource.title}</h3><div className="card-actions" style={{ margin: 0 }}><span className={`badge ${published ? "green" : "amber"}`}>{resource.status}</span>{resource.extractionStatus && <span className="badge">Extraction: {resource.extractionStatus}</span>}</div></div>
+    <div className="row"><div><h3>{resource.title}</h3><div className="card-actions" style={{ margin: 0 }}><span className={`badge ${published ? "green" : "amber"}`}>{resource.status}</span><span className="badge">Version {resource.version||1}</span>{resource.extractionStatus && <span className="badge">Extraction: {resource.extractionStatus}</span>}</div></div>
       {resource.hasFile && <a className="button small" href={`/api/resources/${resource.id}/file`} target="_blank" rel="noreferrer">Open original</a>}
     </div>
+    <button className="button small" type="button" style={{marginTop:12}} onClick={()=>void loadVersions()}>Version history</button>
+    {versionError&&<div className="notice error" role="alert">{versionError}</div>}
+    {!!versions.length&&<div className="stack" style={{marginTop:10}}>{versions.map((v)=><div key={v.id} className="row"><span>v{v.version} · {v.status} · {v.title}</span><button className="button small" type="button" onClick={()=>void openVersion(v)}>Preview</button></div>)}</div>}
+    {preview&&<div className="notice" role="region" aria-label="Resource version preview"><strong>{preview.title} · v{preview.version}</strong><p style={{whiteSpace:"pre-wrap"}}>{preview.text}</p></div>}
     {!published ? <><div className="form-grid" style={{ marginTop: 14 }}>
       <div className="field"><label htmlFor={`resource-edit-title-${resource.id}`}>Title</label><input id={`resource-edit-title-${resource.id}`} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
       <div className="field full"><label htmlFor={`resource-edit-text-${resource.id}`}>Review or add text</label><textarea id={`resource-edit-text-${resource.id}`} value={text} onChange={(e) => setText(e.target.value)} /></div>
     </div><div className="form-actions"><button className="button small" disabled={busy} onClick={() => onEdit(title, text)}>Save edits</button><button className="button small success" disabled={busy} onClick={onPublish}>Publish resource</button></div></> :
-      <p style={{ marginTop: 14 }}>{text || "Published source material is available to enrolled students."}</p>}
+      <><p style={{ marginTop: 14 }}>{text || "Published source material is available to enrolled students."}</p><button className="button small" type="button" disabled={busy} onClick={onArchive}>Archive resource</button></>}
+  </article>;
+}
+
+function QuestionEditor({question,resources,concepts,busy,onSave}:{question:Question;resources:Resource[];concepts:{id:string;name:string}[];busy:boolean;onSave:(data:{prompt:string;answer:string;conceptId:string|null;resourceId:string})=>void}) {
+  const [prompt,setPrompt]=useState(question.prompt),[answer,setAnswer]=useState(question.answer||""),[conceptId,setConceptId]=useState(question.conceptId||""),[resourceId,setResourceId]=useState(String(question.resourceId||""));
+  const [versions,setVersions]=useState<{version:number;prompt:string;answer:string;createdAt:string}[]>([]),[error,setError]=useState("");
+  useEffect(()=>{setPrompt(question.prompt);setAnswer(question.answer||"");setConceptId(question.conceptId||"");setResourceId(String(question.resourceId||""));},[question.prompt,question.answer,question.conceptId,question.resourceId]);
+  async function showHistory(){setError("");try{const data=await api<{versions:typeof versions}>(`/api/questions/${question.id}/versions`);setVersions(data.versions);}catch(e){setError(e instanceof Error?e.message:"Could not load question history.");}}
+  return <article className="question">
+    <form className="form-grid" onSubmit={(event)=>{event.preventDefault();onSave({prompt,answer,conceptId:conceptId||null,resourceId});}}>
+      <div className="field full"><label htmlFor={`question-prompt-${question.id}`}>Question · version {question.version||1}</label><textarea id={`question-prompt-${question.id}`} required value={prompt} onChange={(e)=>setPrompt(e.target.value)}/></div>
+      <div className="field"><label htmlFor={`question-answer-${question.id}`}>Expected answer</label><textarea id={`question-answer-${question.id}`} required value={answer} onChange={(e)=>setAnswer(e.target.value)}/></div>
+      <div className="field"><label htmlFor={`question-concept-${question.id}`}>Concept</label><select id={`question-concept-${question.id}`} value={conceptId} onChange={(e)=>setConceptId(e.target.value)}><option value="">No concept linked</option>{concepts.map((c)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+      <div className="field"><label htmlFor={`question-source-${question.id}`}>Source material</label><select id={`question-source-${question.id}`} required value={resourceId} onChange={(e)=>setResourceId(e.target.value)}>{resources.map((r)=><option key={r.id} value={r.id}>{r.title} · v{r.version||1}</option>)}</select></div>
+      <div className="field"><button className="button small" disabled={busy}>Save as new version</button></div>
+    </form>
+    <span className="badge">Source: {resourceTitle}</span>
+    <button className="button small" type="button" style={{marginLeft:8}} onClick={()=>void showHistory()}>Question history</button>
+    {error&&<div className="notice error" role="alert">{error}</div>}
+    {versions.length>0&&<ul>{versions.map((v)=><li key={v.version}>v{v.version}: {v.prompt} — expected answer: {v.answer}</li>)}</ul>}
   </article>;
 }
 

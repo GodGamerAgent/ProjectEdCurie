@@ -184,9 +184,9 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).post(`/api/courses/${courseId}/assessment/start`).set(as("student"))).status).toBe(403);
     // Simulate corrupt or legacy records directly in the disposable DB: the gate
     // must remain closed even when a published assessment bypasses authoring checks.
-    await db.query("UPDATE questions SET resource_id=$1 WHERE assessment_id=$2", [other.body.id, assessmentId]);
+    await db.query("UPDATE questions SET resource_id=$1,resource_version_id=(SELECT id FROM resource_versions WHERE resource_id=$1 AND version=1) WHERE assessment_id=$2", [other.body.id, assessmentId]);
     expect((await request(app).get(`/api/courses/${courseId}/onboarding`).set(as("student"))).body.state).toBe("no_baseline");
-    await db.query("UPDATE questions SET resource_id=$1,prompt=' ' WHERE assessment_id=$2", [extra.body.id, assessmentId]);
+    await db.query("UPDATE questions SET resource_id=$1,resource_version_id=(SELECT id FROM resource_versions WHERE resource_id=$1 AND version=1),prompt=' ' WHERE assessment_id=$2", [extra.body.id, assessmentId]);
     expect((await request(app).get(`/api/courses/${courseId}/onboarding`).set(as("student"))).body.state).toBe("no_baseline");
     await db.query("UPDATE questions SET prompt='A valid question',answer=' ' WHERE assessment_id=$1", [assessmentId]);
     expect((await request(app).get(`/api/courses/${courseId}/onboarding`).set(as("student"))).body.state).toBe("no_baseline");
@@ -214,6 +214,8 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).post(`/api/courses/${id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);
     const resource = await request(app).post(`/api/courses/${id}/resources`).set(as("teacher")).field("title","Material").field("text","[Page 1]\nA course-specific explanation.");
     expect((await request(app).post(`/api/resources/${resource.body.id}/publish`).set(as("teacher"))).status).toBe(200);
+    const sourceV1=await db.query("SELECT id,text,status FROM resource_versions WHERE resource_id=$1 AND version=1",[resource.body.id]);
+    expect(sourceV1.rowCount).toBe(1);expect(sourceV1.rows[0].status).toBe("published");
     const makeConcept = async (name:string) => request(app).post(`/api/courses/${id}/concepts`).set(as("teacher")).send({name,resourceId:resource.body.id});
     const a = await makeConcept("First"); const b = await makeConcept("Second"); const unassessed = await makeConcept("Unassessed");
     expect(a.status).toBe(201); expect(b.status).toBe(201);
@@ -234,6 +236,9 @@ describe("foundation access and onboarding", () => {
     const baselineStart=await request(app).post(`/api/courses/${id}/assessment/start`).set(as("student"));
     const baseline=await request(app).post(`/api/courses/${id}/assessment/submit`).set(as("student")).send({sessionId:baselineStart.body.sessionId,answers:{[qa.body.id]:" ALPHA ",[qb.body.id]:"wrong"}});
     expect(baseline.status).toBe(201); expect(baseline.body.score).toBe(1); expect(baseline.body.total).toBe(2);
+    const snapshot=await db.query("SELECT questions FROM assessment_sessions WHERE id=$1",[baselineStart.body.sessionId]);
+    expect(snapshot.rows[0].questions[0].questionVersion).toBe(1);expect(snapshot.rows[0].questions[0].resourceVersionId).toBe(sourceV1.rows[0].id);
+    expect((await request(app).get(`/api/resources/${resource.body.id}/excerpt?version=${sourceV1.rows[0].id}&location=Page%201`).set(as("student"))).body.text).toContain("course-specific explanation");
     expect((await request(app).get(`/api/courses/${id}/mastery`).set(as("student"))).body.concepts.find((x:any)=>x.id===unassessed.body.id).status).toBe("Not assessed");
     expect((await request(app).put(`/api/courses/${id}/goal`).set(as("student")).send({goal:"Understand",deadline:"2027-01-01",availability:"Evenings"})).status).toBe(200);
     expect((await request(app).get(`/api/courses/${id}/goal`).set(as("otherInstituteStudent"))).status).toBe(403);
@@ -246,6 +251,12 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).post(`/api/practice/${wrong.body.diagnostic.sessionId}/answer`).set(as("student")).send({answer:"solution"})).body.correct).toBe(true);
     const independent=await request(app).post(`/api/concepts/${b.body.id}/practice`).set(as("student"));
     expect((await request(app).post(`/api/practice/${independent.body.sessionId}/answer`).set(as("student")).send({answer:"solution"})).body.assisted).toBe(false);
+    const editQuestion=await request(app).patch(`/api/questions/${qb.body.id}`).set(as("teacher")).send({prompt:"Updated baseline question",answer:"beta",conceptId:b.body.id,resourceId:resource.body.id});
+    expect(editQuestion.status).toBe(200);expect(editQuestion.body.version).toBe(2);
+    const questionHistory=await request(app).get(`/api/questions/${qb.body.id}/versions`).set(as("teacher"));
+    expect(questionHistory.body.versions.map((v:any)=>v.version)).toEqual([2,1]);
+    expect((await request(app).get(`/api/questions/${qb.body.id}/versions`).set(as("student"))).status).toBe(403);
+    expect((await request(app).post(`/api/assessments/${assessment.body.id}/publish`).set(as("teacher"))).status).toBe(200);
     const staleSession=await request(app).post(`/api/concepts/${b.body.id}/practice`).set(as("student"));
     await db.query("UPDATE resources SET status='draft' WHERE id=$1",[resource.body.id]);
     expect((await request(app).post(`/api/practice/${staleSession.body.sessionId}/hint`).set(as("student"))).status).toBe(404);
