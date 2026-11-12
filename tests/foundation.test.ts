@@ -765,4 +765,63 @@ describe("foundation access and onboarding", () => {
     const stable=await request(app).get(`/api/courses/${course.id}/plan`).set(as("student"));
     expect(stable.body.recalibrated).toBe(false);expect(stable.body.plan.version).toBe(3);
   });
+  it("keeps AI questions private until assigned-teacher review and explicit assessment publication", async () => {
+    const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated AI draft review"})).body;
+    await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email});
+    const resource=(await request(app).post(`/api/courses/${course.id}/resources`).set(as("teacher")).field("title","Loop notes").field("text","A for loop repeats instructions for each item in a sequence.")).body;
+    const concept=(await request(app).post(`/api/courses/${course.id}/concepts`).set(as("teacher")).send({name:"For loops",resourceId:resource.id})).body;
+    const assessment=(await request(app).post(`/api/courses/${course.id}/assessments`).set(as("teacher")).send({title:"Generated baseline"})).body;
+    const url=`/api/assessments/${assessment.id}/ai-drafts`;
+    expect((await request(app).post(url).set(as("student")).send({conceptId:concept.id})).status).toBe(403);
+    expect((await request(app).get(url).set(as("otherTeacher"))).status).toBe(403);
+    expect((await request(app).post(url).set(as("teacher")).send({conceptId:concept.id})).status).toBe(400);
+    await request(app).post(`/api/resources/${resource.id}/publish`).set(as("teacher"));
+    vi.stubEnv("GROQ_API_KEY","");
+    expect((await request(app).post(url).set(as("teacher")).send({conceptId:concept.id})).status).toBe(503);
+    vi.stubEnv("GROQ_API_KEY","isolated-test-key");
+    const q={prompt:"What does a for loop repeat?",options:["Instructions","Only dates","Only colors","Nothing"],correctOption:0,sourceQuote:"A for loop repeats instructions for each item in a sequence."};
+    const provider=vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({questions:[q,{...q,prompt:"What supplies the items for the loop?",options:["A sequence","A comment","An error","A filename"],correctOption:0}]})}}]}),{status:200}));
+    vi.stubGlobal("fetch",provider);
+    try {
+      expect((await request(app).post(url).set(as("teacher")).send({conceptId:concept.id,count:4})).status).toBe(400);
+      expect(provider).not.toHaveBeenCalled();
+      expect((await request(app).post(url).set(as("teacher")).send({conceptId:concept.id,count:2})).status).toBe(201);
+      const drafts=(await request(app).get(url).set(as("teacher"))).body.drafts;
+      expect(drafts).toHaveLength(2);
+      expect((await db.query("SELECT count(*) FROM questions WHERE assessment_id=$1",[assessment.id])).rows[0].count).toBe("0");
+      expect((await request(app).get(url).set(as("student"))).status).toBe(403);
+      expect((await request(app).get(`/api/courses/${course.id}/onboarding`).set(as("student"))).body.state).toBe("no_baseline");
+      const draft=drafts[0], reviewUrl=`/api/ai-question-drafts/${draft.id}/review`, payload={action:"accept",prompt:draft.prompt,answer:draft.answer};
+      expect((await request(app).post(reviewUrl).set(as("student")).send(payload)).status).toBe(403);
+      expect((await request(app).post(reviewUrl).set(as("otherInstituteTeacher")).send(payload)).status).toBe(403);
+      const accepted=await request(app).post(reviewUrl).set(as("teacher")).send(payload);
+      expect(accepted.status).toBe(200);
+      const repeat=await request(app).post(reviewUrl).set(as("teacher")).send(payload);
+      expect(repeat.body.questionId).toBe(accepted.body.questionId);
+      expect((await db.query("SELECT count(*) FROM questions WHERE assessment_id=$1",[assessment.id])).rows[0].count).toBe("1");
+      expect((await request(app).get(`/api/courses/${course.id}/onboarding`).set(as("student"))).body.state).toBe("no_baseline");
+      expect((await request(app).post(`/api/assessments/${assessment.id}/publish`).set(as("teacher"))).status).toBe(200);
+      expect((await request(app).get(`/api/courses/${course.id}/onboarding`).set(as("student"))).body.state).toBe("ready");
+      expect((await request(app).post(url).set(as("teacher")).send({conceptId:concept.id})).status).toBe(409);
+      const start=(await request(app).post(`/api/courses/${course.id}/assessment/start`).set(as("student"))).body;
+      expect(start.questions[0].answer).toBeUndefined();
+      const result=await request(app).post(`/api/courses/${course.id}/assessment/submit`).set(as("student")).send({sessionId:start.sessionId,answers:{[accepted.body.questionId]:draft.answer}});
+      expect(result.body.score).toBe(1);
+      // Once published, accepting a pending draft cannot silently reopen the assessment.
+      const second=drafts[1];
+      expect((await request(app).post(`/api/ai-question-drafts/${second.id}/review`).set(as("teacher")).send({action:"accept",prompt:second.prompt,answer:second.answer})).status).toBe(409);
+      await db.query("UPDATE assessments SET status='draft' WHERE id=$1",[assessment.id]);
+      await request(app).post(`/api/resources/${resource.id}/archive`).set(as("teacher"));
+      expect((await request(app).post(`/api/ai-question-drafts/${second.id}/review`).set(as("teacher")).send({action:"accept",prompt:second.prompt,answer:second.answer})).status).toBe(409);
+      expect((await request(app).post(`/api/ai-question-drafts/${second.id}/review`).set(as("teacher")).send({action:"discard"})).status).toBe(200);
+      await request(app).post(`/api/resources/${resource.id}/publish`).set(as("teacher"));
+      // Reject invented quotes and malformed provider JSON instead of saving anything.
+      for (const data of [null,{questions:[{...q,sourceQuote:"An invented source quote."}]}]) {
+        vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(data)}}]}),{status:200})));
+        expect((await request(app).post(url).set(as("teacher")).send({conceptId:concept.id})).status).toBe(502);
+      }
+      expect((await request(app).get(url).set(as("teacher"))).body.drafts).toHaveLength(0);
+    } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
+
 });

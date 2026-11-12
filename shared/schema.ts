@@ -463,3 +463,16 @@ export const aiGenerations = pgTable("ai_generations", {
   errorCategory: text("error_category"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
+export const aiQuestionDrafts = pgTable("ai_question_drafts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  assessmentId: uuid("assessment_id").notNull().references(() => assessments.id, { onDelete: "cascade" }),
+  generationId: uuid("generation_id").notNull().references(() => aiGenerations.id),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  resourceVersionId: uuid("resource_version_id").notNull().references(() => resourceVersions.id),
+  prompt: text("prompt").notNull(),
+  answer: text("answer").notNull(),
+  sourceQuote: text("source_quote").notNull(),
+  status: text("status").notNull().default("pending"),
+  acceptedQuestionId: uuid("accepted_question_id").references(() => questions.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});

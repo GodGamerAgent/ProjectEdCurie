@@ -9,6 +9,7 @@ import { StudentStudy, TeacherStudy } from "./StudyLoop";
 import { StudentAssignments } from "./AssignmentPanels";
 import RewardsPanel from "./RewardsPanel";
 import StudentIntake from "./StudentIntake";
+import QuestionDrafts from "./QuestionDrafts";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -275,6 +276,7 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
           <div className="row"><div><h3>{assessment.title}</h3><span className={`badge ${assessment.status.toLowerCase() === "published" ? "green" : "amber"}`}>{assessment.status}</span></div>
             {assessment.status.toLowerCase() !== "published" && <button className="button small success" disabled={busy} onClick={() => void run(() => api(`/api/assessments/${assessment.id}/publish`, { method: "POST" }), "Assessment published.")}>Publish assessment</button>}
           </div>
+          {assessment.status === "draft" && <QuestionDrafts assessmentId={assessment.id} concepts={detail.concepts} refresh={refresh} />}
           {assessment.questions.length ? <div className="question-list" style={{ marginTop: 14 }}>{assessment.questions.map((q) => <QuestionEditor key={q.id} question={q} resources={detail.resources} concepts={detail.concepts} busy={busy} onSave={(data)=>run(()=>api(`/api/questions/${q.id}`,{method:"PATCH",body:jsonBody(data)}),"A new question version was saved.")}/>)}</div> : <div className="empty" style={{ marginTop: 14 }}><span className="empty-mark">Q</span><h3>No questions yet</h3><p>Add questions based on a published or draft resource.</p></div>}
           {assessment.status.toLowerCase() !== "published" && <form className="form-grid" style={{ marginTop: 14 }} onSubmit={(event) => {
             event.preventDefault();

@@ -18,6 +18,7 @@ import { analyticsRoutes } from "./routes-analytics";
 import { xpRoutes } from "./routes-xp";
 import { intakeRoutes } from "./routes-intake";
 import { durationRoutes } from "./routes-duration";
+import { questionDraftRoutes } from "./routes-question-drafts";
 import { milestoneRoutes } from "./routes-milestones";
 
 type Resolver = (req: Request) => Promise<AppUser>;
@@ -61,6 +62,7 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   app.use(instituteRoutes(db, inviteSender));
   app.use(courseRoutes(db));
   app.use(materialRoutes(db));
+  app.use(questionDraftRoutes(db));
   app.use(studyRoutes(db));
   app.use(twinRoutes(db));
   app.use(planningRoutes(db));
