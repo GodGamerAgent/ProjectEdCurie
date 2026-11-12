@@ -152,17 +152,25 @@ export async function demoAI(db: Pool, instructions: string, data: unknown, imag
 export async function analyzePdf(
   db: Pool, instructions: string, data: unknown, settings: AISettings,
   attachment: {image: Image} | {pdf: PDF},
+  originalFallback?: {data: unknown; pdf: PDF},
 ) {
   const image = "image" in attachment ? attachment.image : undefined;
   const pdf = "pdf" in attachment ? attachment.pdf : undefined;
   const hasFallback = settings.baseUrl === googleCompatibleBase && settings.model !== googlePdfFallbackModel;
   try {
-    return await demoAI(db,instructions,data,image,pdf,settings,hasFallback && image ? 12000 : undefined);
+    const result = await demoAI(db,instructions,data,image,pdf,settings,hasFallback && image ? 12000 : undefined);
+    return {result, wholeFile: Boolean(pdf)};
   } catch (error) {
     if (!(error instanceof ProviderUnavailable) || !hasFallback) {
       throw error;
     }
-    return demoAI(db,instructions,data,image,pdf,{...settings,model:googlePdfFallbackModel});
+    const fallback = {...settings,model:googlePdfFallbackModel};
+    if (originalFallback) {
+      const result = await demoAI(db,instructions,originalFallback.data,undefined,originalFallback.pdf,fallback);
+      return {result, wholeFile: true};
+    }
+    const result = await demoAI(db,instructions,data,image,pdf,fallback);
+    return {result, wholeFile: Boolean(pdf)};
   }
 }
 export async function transcribe(file: Express.Multer.File) {

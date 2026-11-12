@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { readFile } from "node:fs/promises";
 import request from "supertest";
 import { Pool } from "pg";
 import { createApi } from "../server/routes";
@@ -73,6 +74,63 @@ beforeAll(async () => {
 });
 afterAll(async () => { await db.end(); });
 
+it("uses the original PDF after Google page-image processing times out", async () => {
+  const teacher=as("teacher");
+  const course=await request(app).post("/api/courses").set(teacher).send({title:"PDF recovery"});
+  expect(course.status).toBe(201);
+  const base=`/api/demo/courses/${course.body.id}`;
+  const topic=await request(app).post(base+"/topics").set(teacher).send({title:"Sequences"});
+  expect(topic.status).toBe(201);
+  const suppliedPdf=process.env.EDCURIE_TEST_PDF;
+  const original=suppliedPdf ? await readFile(suppliedPdf) : samplePdf();
+  const upload=await request(app).post(`/api/courses/${course.body.id}/resources`).set(teacher)
+    .field("title","PDF recovery").field("topicId",topic.body.id)
+    .attach("file",original,{filename:"resource.pdf",contentType:"application/pdf"});
+  expect(upload.status).toBe(201);
+  const {id,pdfPages}=upload.body;
+  expect(pdfPages).toBe(suppliedPdf ? 3 : 2);
+  const pages=Array.from({length:pdfPages},(_,index)=>({
+    page:index+1,summary:`Mock summary for page ${index+1}.`,
+    problems:index===0 ? [{prompt:"Find the first five terms of $c_n = n^2 - 1$.",answer:"",quote:"Find the first five terms."}] : [],
+  }));
+  const provider=vi.fn<(url:string,init:RequestInit)=>Promise<Response>>();
+  provider.mockImplementationOnce(async (url,init)=>{
+    expect(url).toContain("/models/gemma-4-31b-it:generateContent");
+    const parts=JSON.parse(String(init.body)).contents[0].parts;
+    expect(JSON.parse(parts[0].text).expectedPages).toEqual([1]);
+    expect(parts[1].inlineData).toMatchObject({mimeType:"image/png",data:expect.stringMatching(/^iVBOR/)});
+    throw new DOMException("Provider deadline exceeded","TimeoutError");
+  }).mockImplementationOnce(async (url,init)=>{
+    expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
+    const parts=JSON.parse(String(init.body)).contents[0].parts;
+    expect(JSON.parse(parts[0].text).expectedPages).toBe(`1 through ${pdfPages}`);
+    expect(parts[1].inlineData).toEqual({mimeType:"application/pdf",data:original.toString("base64")});
+    return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({pages})}]}}]});
+  });
+  const baseUrl="https://generativelanguage.googleapis.com/v1beta/openai";
+  vi.stubEnv("AI_PROVIDER_BASE_URL",baseUrl);
+  vi.stubEnv("AI_PROVIDER_API_KEY","custom-test-key");
+  vi.stubGlobal("fetch",provider);
+  try {
+    const settings=await request(app).put("/api/admin/ai/status").set(as("admin"))
+      .send({baseUrl,model:"gemma-4-31b-it",pdfMode:"vision"});
+    expect(settings.status).toBe(200);
+    const processPdf=()=>request(app).post(`/api/demo/resources/${id}/process`).set(teacher);
+    const result=await processPdf();
+    expect(result.body).toEqual({remaining:0});
+    const view=await request(app).get(base+"/teacher").set(teacher);
+    const resource=view.body.resources.find((item:{id:string})=>item.id===id);
+    expect(resource.parts).toEqual(pages);
+    expect(resource.text).toContain(`## Page ${pdfPages}`);
+    expect(resource.text).toContain(pages[0].problems[0].prompt);
+    expect((await processPdf()).body).toEqual({remaining:0});
+    expect(provider).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    await db.query("DELETE FROM demo_ai_settings WHERE id='default'");
+  }
+});
 
 it("runs the teacher-to-student demo, scoped by course and baseline revision", async () => {
   const teacher=as("teacher"),student=as("student");
