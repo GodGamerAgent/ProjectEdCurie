@@ -618,5 +618,11 @@ describe("foundation access and onboarding", () => {
     expect(replanned.body.plan.deadline).toBe(deadline);
     expect(replanned.body.plan.version).toBe(2);expect(replanned.body.plan.required_minutes).toBe(30);
     expect((await request(app).get(`/api/courses/${course.id}/plan`).set(as("student"))).body.blocks.some((b:any)=>b.id===first.id&&b.state==="completed")).toBe(true);
+    await db.query(`INSERT INTO study_attempts(user_id,course_id,concept_id,kind,correct,assisted) VALUES($1,$2,$3,'diagnostic',false,true)`,
+      [actors.student.id,course.id,concept.id]);
+    const automatic=await request(app).get(`/api/courses/${course.id}/plan`).set(as("student"));
+    expect(automatic.body.recalibrated).toBe(true);expect(automatic.body.plan.version).toBe(3);expect(automatic.body.plan.deadline).toBe(deadline);
+    const stable=await request(app).get(`/api/courses/${course.id}/plan`).set(as("student"));
+    expect(stable.body.recalibrated).toBe(false);expect(stable.body.plan.version).toBe(3);
   });
 });

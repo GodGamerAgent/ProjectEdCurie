@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Pool } from "pg";
+import { randomUUID } from "node:crypto";
 import { HttpError } from "./auth";
 import { currentUser, uuid } from "./access";
 import { studentReady } from "./routes-study";
@@ -192,13 +193,24 @@ export function planRoutes(db:Pool) {
   });
   router.get("/api/courses/:id/plan",async(req,res)=>{
     const user=currentUser(res);await studentReady(db,user,req.params.id);
-    const plan=(await db.query("SELECT * FROM study_plans WHERE user_id=$1 AND course_id=$2 ORDER BY version DESC LIMIT 1",[user.id,req.params.id])).rows[0];
+    let plan=(await db.query("SELECT * FROM study_plans WHERE user_id=$1 AND course_id=$2 ORDER BY version DESC LIMIT 1",[user.id,req.params.id])).rows[0];
     if(!plan)return res.json({plan:null,blocks:[]});
+    const trigger=(await db.query(`SELECT
+      EXISTS(SELECT 1 FROM study_blocks b WHERE b.plan_id=$3 AND b.user_id=$1 AND b.state='planned' AND b.ends_at<now()) OR
+      EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$1 AND a.course_id=$2 AND a.created_at>$4
+        AND a.kind IN('baseline','practice','twin','review','diagnostic','comprehension')) AS needed`,
+      [user.id,req.params.id,plan.id,plan.created_at])).rows[0].needed;
+    let recalibrated=false;
+    if(trigger){
+      try{await makePlan(user,req.params.id,randomUUID());recalibrated=true;}
+      catch(error){if(!(error instanceof HttpError&&error.status===409))throw error;}
+      plan=(await db.query("SELECT * FROM study_plans WHERE user_id=$1 AND course_id=$2 ORDER BY version DESC LIMIT 1",[user.id,req.params.id])).rows[0];
+    }
     const blocks=await db.query(`SELECT b.id,b.concept_id AS "conceptId",c.name AS "conceptName",b.phase,b.starts_at AS "startsAt",b.ends_at AS "endsAt",b.state,b.explanation,b.started_at AS "startedAt",b.completed_at AS "completedAt"
       FROM study_blocks b JOIN concepts c ON c.id=b.concept_id JOIN study_plans p ON p.id=b.plan_id
-      WHERE b.user_id=$1 AND b.course_id=$2 AND (b.plan_id=$3 OR b.state IN('completed','started'))
+      WHERE b.user_id=$1 AND b.course_id=$2 AND (b.plan_id=$3 OR b.state IN('completed','started','missed','replanned'))
       ORDER BY b.starts_at`,[user.id,req.params.id,plan.id]);
-    res.json(planResponse(plan,blocks.rows));
+    res.json({...planResponse(plan,blocks.rows),recalibrated});
   });
   router.post("/api/study-blocks/:id/start",async(req,res)=>{
     const user=currentUser(res),id=uuid(req.params.id);

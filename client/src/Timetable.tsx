@@ -81,6 +81,7 @@ export function StudentSchedule({courseId,baselineReady,refreshKey,onStartBlock}
   const [events,setEvents]=useState<ClassEvent[]>([]);
   const [goalSaved,setGoalSaved]=useState(false),[feasibility,setFeasibility]=useState<{score:number;deadline:string;requiredMinutes:number;capacityMinutes:number;explanation:string}|null>(null);
   const [plan,setPlan]=useState<PlanSummary|null>(null),[blocks,setBlocks]=useState<PlanBlock[]>([]);
+  const [recalibrated,setRecalibrated]=useState(false);
   const [busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
   const load=useCallback(async()=>{
     const [a,c,t,g]=await Promise.all([
@@ -93,10 +94,10 @@ export function StudentSchedule({courseId,baselineReady,refreshKey,onStartBlock}
     if(baselineReady&&g.goal){
       const [f,p]=await Promise.all([
         api<{score:number;deadline:string;requiredMinutes:number;capacityMinutes:number;explanation:string}>(`/api/courses/${courseId}/feasibility`),
-        api<{plan:PlanSummary|null;blocks:PlanBlock[]}>(`/api/courses/${courseId}/plan`)
+        api<{plan:PlanSummary|null;blocks:PlanBlock[];recalibrated?:boolean}>(`/api/courses/${courseId}/plan`)
       ]);
-      setFeasibility(f);setPlan(p.plan);setBlocks(p.blocks);
-    }else{setFeasibility(null);setPlan(null);setBlocks([]);}
+      setFeasibility(f);setPlan(p.plan);setBlocks(p.blocks);setRecalibrated(Boolean(p.recalibrated));
+    }else{setFeasibility(null);setPlan(null);setBlocks([]);setRecalibrated(false);}
   },[courseId,baselineReady,refreshKey]);
   useEffect(()=>{void load().catch(e=>setError(e.message));},[load]);
   async function run(action:()=>Promise<void>,message:string){setBusy(true);setError("");setNotice("");try{await action();await load();setNotice(message);}catch(e){setError(e instanceof Error?e.message:"Could not save your schedule.");}finally{setBusy(false);}}
@@ -151,6 +152,7 @@ export function StudentSchedule({courseId,baselineReady,refreshKey,onStartBlock}
       {!events.length&&<p className="muted">No class schedule has been added.</p>}</div>
     <div className="divider"/><h3>Feasibility and study plan</h3>
     {!baselineReady?<p className="muted">Complete the course baseline to plan study sessions.</p>:!goalSaved?<p className="muted">Save a goal and deadline above before building a study plan.</p>:<>
+      {recalibrated&&<div className="notice success" role="status">New learning evidence or a missed session was detected. The remaining plan was recalibrated without moving your deadline.</div>}
       {feasibility&&<div className="notice"><strong>Feasibility: {feasibility.score}/10</strong><p>{feasibility.explanation}</p>
         <p>Estimated work: {feasibility.requiredMinutes} minutes · available before deadline: {feasibility.capacityMinutes} minutes · deadline: {feasibility.deadline}</p></div>}
       <p className="muted">The plan uses teacher workload estimates, your availability, class events, and private commitments. Replanning preserves completed work and the original deadline. Early starts are allowed.</p>
