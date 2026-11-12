@@ -155,6 +155,13 @@
       "when": 1794468496922,
       "tag": "0021_lumpy_the_renegades",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1794468891919,
+      "tag": "0022_superb_sage",
+      "breakpoints": true
     }
   ]
 }

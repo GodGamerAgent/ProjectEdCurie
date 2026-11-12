@@ -478,8 +478,11 @@ describe("foundation access and onboarding", () => {
   it("routes assignment submissions through teacher review before exposing diagnosis",async()=>{
     const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated assignment review"})).body;
     expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);
+    const source=(await request(app).post(`/api/courses/${course.id}/resources`).set(as("teacher")).field("title","Assignment source").field("text","Source material for diagnosis.")).body;
+    expect((await request(app).post(`/api/resources/${source.id}/publish`).set(as("teacher"))).status).toBe(200);
+    const concept=(await request(app).post(`/api/courses/${course.id}/concepts`).set(as("teacher")).send({name:"Assignment concept",resourceId:source.id})).body;
     const created=await request(app).post(`/api/courses/${course.id}/assignments`).set(as("teacher")).send({
-      title:"Explain the result",instructions:"Show your reasoning and cite the class notes.",rubric:["Reasoning uses course material"],dueAt:"2026-12-10T17:00:00.000Z"
+      title:"Explain the result",instructions:"Show your reasoning and cite the class notes.",conceptId:concept.id,rubric:["Reasoning uses course material"],dueAt:"2026-12-10T17:00:00.000Z"
     });
     expect(created.status).toBe(201);
     expect((await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments).toHaveLength(0);
@@ -505,17 +508,21 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).get(fileUrl).set(as("teacher"))).status).toBe(200);
     expect((await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("otherTeacher")).send({score:80,feedback:"Reviewed",rubricScores:[3]})).status).toBe(403);
     expect((await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("teacher")).send({score:80,feedback:"Reviewed",rubricScores:[5]})).status).toBe(400);
+    expect((await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("teacher")).send({score:80,feedback:"Reviewed",rubricScores:[3],misconceptionCode:"unrecognized"})).status).toBe(400);
     const reviewed=await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("teacher")).send({
-      score:86,feedback:"Your explanation is clear; check the units.",rubricScores:[3],misconception:"Unit conversion"
+      score:66,feedback:"Your explanation is clear; check the units.",rubricScores:[3],misconception:"Unit conversion",
+      misconceptionCode:"units_or_notation",includeEvidence:true
     });
     expect(reviewed.status).toBe(200);
     const privateResult=(await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments[0];
-    expect(privateResult).toMatchObject({submissionStatus:"reviewed",score:86,teacherFeedback:"Your explanation is clear; check the units.",misconception:"Unit conversion"});
+    expect(privateResult).toMatchObject({submissionStatus:"reviewed",score:66,teacherFeedback:"Your explanation is clear; check the units.",misconception:"Unit conversion",misconceptionCode:"units_or_notation",verifiedEvidence:true});
     expect((await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student")).send({response:"replace",confidence:5})).status).toBe(409);
     expect((await db.query("SELECT count(*) FROM study_attempts WHERE user_id=$1 AND course_id=$2 AND kind='practice'",[actors.student.id,course.id])).rows[0].count).toBe(baselineBefore);
     const analytics=await request(app).get(`/api/courses/${course.id}/analytics?days=7`).set(as("teacher"));
     expect(analytics.status).toBe(200);expect(analytics.body.students).toMatchObject({enrolled:1,active:0});
     expect(analytics.body.assignments).toMatchObject({assignments:1,submissions:1,reviewed:1});
+    expect(analytics.body.concepts[0].verifiedAssignments).toBe(1);
+    expect((await db.query("SELECT count(*) FROM assignment_evidence WHERE submission_id=$1",[submission.body.id])).rows[0].count).toBe("1");
     expect(analytics.body.activity).toHaveLength(7);
     expect((await request(app).get(`/api/courses/${course.id}/analytics`).set(as("otherTeacher"))).status).toBe(403);
     expect((await request(app).get(`/api/courses/${course.id}/analytics?days=3`).set(as("teacher"))).status).toBe(400);

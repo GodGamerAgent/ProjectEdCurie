@@ -41,7 +41,8 @@ export function planRoutes(db:Pool) {
         FROM class_timetable_events e WHERE e.course_id=$1 AND e.status='active'`,[courseId]),
       db.query(`SELECT c.id,c.name,c.learning_minutes,c.practice_minutes,c.revision_minutes,c.difficulty,
         COALESCE((SELECT array_agg(cp.prerequisite_id) FROM concept_prerequisites cp WHERE cp.concept_id=c.id),'{}') AS prerequisites,
-        count(sa.id) FILTER(WHERE sa.kind IN('baseline','practice','twin','review','diagnostic') AND sa.correct=false)::int AS errors
+        (count(sa.id) FILTER(WHERE sa.kind IN('baseline','practice','twin','review','diagnostic') AND sa.correct=false)
+          + COALESCE((SELECT count(*) FROM assignment_evidence ae WHERE ae.user_id=$2 AND ae.course_id=c.course_id AND ae.concept_id=c.id AND ae.score<70),0))::int AS errors
         FROM concepts c JOIN resources r ON r.id=c.resource_id AND r.course_id=c.course_id AND r.status='published'
         JOIN resource_versions rv ON rv.resource_id=r.id AND rv.version=r.version AND rv.status='published' AND length(btrim(rv.text))>0
         LEFT JOIN study_attempts sa ON sa.concept_id=c.id AND sa.user_id=$2 AND sa.course_id=c.course_id

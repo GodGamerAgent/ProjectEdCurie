@@ -348,6 +348,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     const result=await db.query(`SELECT c.id,c.name,count(a.id)::int AS attempts,
       count(a.id) FILTER (WHERE a.assisted)::int AS assisted_attempts,count(a.id) FILTER (WHERE a.correct AND a.assisted)::int AS assisted_correct,
       count(a.id) FILTER (WHERE a.kind='baseline')::int AS baseline_attempts,
+      (SELECT count(*)::int FROM assignment_evidence ae WHERE ae.user_id=$2 AND ae.course_id=c.course_id AND ae.concept_id=c.id) AS verified_assignments,
       COALESCE(e.independent_attempts,0)::int AS independent_attempts,COALESCE(e.independent_correct,0)::int AS independent_correct,
       COALESCE(e.recent_independent,'[]'::jsonb) AS recent_independent
       FROM concepts c LEFT JOIN study_attempts a ON a.concept_id=c.id AND a.user_id=$2 AND a.course_id=c.course_id
@@ -365,7 +366,9 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
   router.get("/api/courses/:id/targeted-practice",async(req,res)=>{
     const user=currentUser(res);await studentReady(db,user,req.params.id);
     const targets=await db.query(`SELECT c.id AS "conceptId",c.name,
-      CASE WHEN EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id
+       CASE WHEN EXISTS(SELECT 1 FROM assignment_evidence ae WHERE ae.user_id=$2 AND ae.concept_id=c.id AND ae.score<70)
+         THEN 'A teacher-reviewed assignment suggests another check on this topic.'
+         WHEN EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id
            AND a.kind IN ('practice','twin','review','diagnostic','comprehension') AND a.correct=false)
         THEN 'A previous attempt on this topic may benefit from another check.'
         WHEN EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id AND a.kind='baseline' AND a.correct=false)
@@ -381,7 +384,8 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
         JOIN resources r ON r.id=rv.resource_id AND r.course_id=$1 AND r.status='published'
         WHERE p.concept_id=c.id AND NOT EXISTS(SELECT 1 FROM practice_twin_links t WHERE t.twin_problem_id=p.id)
           AND NOT EXISTS(SELECT 1 FROM practice_sessions s WHERE s.user_id=$2 AND s.problem_id=p.id))
-      ORDER BY EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id AND a.correct=false) DESC,
+       ORDER BY EXISTS(SELECT 1 FROM assignment_evidence ae WHERE ae.user_id=$2 AND ae.concept_id=c.id AND ae.score<70) DESC,
+         EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id AND a.correct=false) DESC,
         EXISTS(SELECT 1 FROM study_attempts a WHERE a.user_id=$2 AND a.concept_id=c.id) ASC,c.name LIMIT 5`,[req.params.id,user.id]);
     res.json({targets:targets.rows});
   });
@@ -390,6 +394,7 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     const result=await db.query(`SELECT u.id AS "studentId",u.email,c.id AS "conceptId",c.name,
       count(a.id)::int AS attempts,count(a.id) FILTER (WHERE a.assisted)::int AS assisted_attempts,
       count(a.id) FILTER (WHERE a.correct AND a.assisted)::int AS assisted_correct,count(a.id) FILTER (WHERE a.kind='baseline')::int AS baseline_attempts,
+      (SELECT count(*)::int FROM assignment_evidence ae WHERE ae.user_id=u.id AND ae.course_id=c.course_id AND ae.concept_id=c.id) AS verified_assignments,
       COALESCE(ev.independent_attempts,0)::int AS independent_attempts,COALESCE(ev.independent_correct,0)::int AS independent_correct,
       COALESCE(ev.recent_independent,'[]'::jsonb) AS recent_independent
       FROM enrollments e JOIN courses course ON course.id=e.course_id

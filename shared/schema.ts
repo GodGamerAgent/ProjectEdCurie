@@ -335,6 +335,7 @@ export const adaptiveMockSessions = pgTable("adaptive_mock_sessions",{
 export const assignments = pgTable("assignments",{
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(()=>courses.id),
+  conceptId: uuid("concept_id").references(()=>concepts.id),
   createdBy: uuid("created_by").notNull().references(()=>users.id),
   title: text("title").notNull(),
   instructions: text("instructions").notNull(),
@@ -359,11 +360,24 @@ export const assignmentSubmissions = pgTable("assignment_submissions",{
   score: integer("score"),
   rubricScores: jsonb("rubric_scores").$type<number[]>(),
   misconception: text("misconception"),
+  misconceptionCode: text("misconception_code"),
+  verifiedEvidence: boolean("verified_evidence").notNull().default(false),
   teacherFeedback: text("teacher_feedback"),
   reviewedBy: uuid("reviewed_by").references(()=>users.id),
   submittedAt: timestamp("submitted_at",{withTimezone:true}).defaultNow().notNull(),
   reviewedAt: timestamp("reviewed_at",{withTimezone:true})
 },table=>[uniqueIndex("assignment_submission_one_per_student").on(table.assignmentId,table.userId)]);
+export const assignmentEvidence = pgTable("assignment_evidence",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  submissionId: uuid("submission_id").notNull().references(()=>assignmentSubmissions.id),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  conceptId: uuid("concept_id").notNull().references(()=>concepts.id),
+  score: integer("score").notNull(),
+  misconceptionCode: text("misconception_code"),
+  reviewedBy: uuid("reviewed_by").notNull().references(()=>users.id),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("assignment_evidence_submission_unique").on(table.submissionId)]);
 export const xpLedger = pgTable("xp_ledger",{
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(()=>users.id),

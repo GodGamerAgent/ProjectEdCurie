@@ -29,7 +29,8 @@ export function analyticsRoutes(db:Pool) {
         count(DISTINCT sa.problem_id) FILTER(WHERE sa.kind IN('practice','twin','review') AND NOT sa.assisted)::int AS "independentProblems",
         count(sa.id) FILTER(WHERE sa.kind='review')::int AS "reviewAttempts",
         count(sa.id) FILTER(WHERE sa.assisted)::int AS "assistedAttempts",
-        count(sa.id) FILTER(WHERE sa.kind IN('practice','twin','review') AND sa.correct=false)::int AS "incorrectAttempts"
+        count(sa.id) FILTER(WHERE sa.kind IN('practice','twin','review') AND sa.correct=false)::int AS "incorrectAttempts",
+        (SELECT count(*)::int FROM assignment_evidence ae WHERE ae.course_id=c.course_id AND ae.concept_id=c.id) AS "verifiedAssignments"
         FROM concepts c LEFT JOIN study_attempts sa ON sa.concept_id=c.id AND sa.course_id=c.course_id
         WHERE c.course_id=$1 GROUP BY c.id ORDER BY c.name`,[courseId])
     ]);

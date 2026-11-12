@@ -8,7 +8,7 @@ import TeacherAnalytics from "./TeacherAnalytics";
 type Concept = { id: string; name: string; resourceId: string; prerequisites?: {id:string;name:string}[] };
 type Resource = { id: string | number; title: string };
 type Assessment = { id: string | number; title: string; questions: { id: string | number; prompt: string; conceptId?: string | null }[] };
-type Evidence = { id?: string; studentId?: string; email?: string; conceptId?: string; name: string; status: string; attempts: number; independent_correct: number; independent_attempts: number; assisted_correct: number; assisted_attempts: number };
+type Evidence = { id?: string; studentId?: string; email?: string; conceptId?: string; name: string; status: string; attempts: number; independent_correct: number; independent_attempts: number; assisted_correct: number; assisted_attempts: number;verified_assignments?:number };
 type LessonCheck = {id:string;prompt:string;options:string[];citations:{resourceId:string;resourceVersionId:string;title?:string;location:string}[];selectedOption?:number|null;correct?:boolean|null;answered?:boolean;answeredAt?:string|null;correctOption?:number|null};
 function LessonCheckView({lessonId,check,run}:{lessonId:string;check:LessonCheck;run:(action:()=>Promise<void>)=>void}) {
   const [selected,setSelected]=useState<number|null>(check.selectedOption??null);
@@ -151,10 +151,10 @@ export function TeacherStudy({ courseId, resources, assessments, concepts, refre
     </>}
     <TwinLinker courseId={courseId} revision={assessments}/>
     <TeacherTimetable courseId={courseId} concepts={concepts}/>
-    <TeacherAssignments courseId={courseId}/>
+    <TeacherAssignments courseId={courseId} concepts={concepts}/>
     <TeacherAnalytics courseId={courseId}/>
     <div className="divider"/><div className="row"><h3>Student progress</h3><button className="button small" type="button" onClick={()=>void loadProgress().catch((e)=>setError(e.message))}>Refresh progress</button></div>
-    {progress.length ? <div className="stack">{progress.map((p)=><div className="course-card" key={`${p.studentId}-${p.conceptId}`}><strong>{p.email} · {p.name}</strong><p>{p.status} · Independent {p.independent_correct}/{p.independent_attempts} · Assisted {p.assisted_correct}/{p.assisted_attempts}</p></div>)}</div> : <p className="muted">Progress appears once students and concepts are available.</p>}
+    {progress.length ? <div className="stack">{progress.map((p)=><div className="course-card" key={`${p.studentId}-${p.conceptId}`}><strong>{p.email} · {p.name}</strong><p>{p.status} · Independent {p.independent_correct}/{p.independent_attempts} · Assisted {p.assisted_correct}/{p.assisted_attempts} · Teacher-verified assignments {p.verified_assignments||0}</p></div>)}</div> : <p className="muted">Progress appears once students and concepts are available.</p>}
   </section>;
 }
 
@@ -219,7 +219,7 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
       </div>)}
     </div>}
     <p className="muted" style={{marginTop:20}}>Explanation format and hint style can be changed in Preferences.</p>
-    {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Your teacher has not added concepts yet.</p>}
+    {concepts.length?<div className="stack">{concepts.map((c)=>{const e=evidence.find((x)=>x.id===c.id);return <div className="course-card row" key={c.id}><div><strong>{c.name}</strong><p>{e?.status||"Not assessed"} · Independent {e?.independent_correct||0}/{e?.independent_attempts||0} · Assisted {e?.assisted_correct||0}/{e?.assisted_attempts||0} · Teacher-verified assignments {e?.verified_assignments||0}</p></div><button className="button small" onClick={()=>{setSelected(c.id);setLesson(null);setHistory([]);setSession(null);setHints([]);setResult("");setWalkthrough("");setSource(null);}}>Open concept</button></div>;})}</div>:<p className="muted">Your teacher has not added concepts yet.</p>}
     {selected && <div className="resource-card" style={{marginTop:18}}><h3>{concepts.find((x)=>x.id===selected)?.name}</h3>
     {plannedPhase&&<p className="notice">Scheduled phase: {plannedPhase}. Use the matching lesson or practice action below, then mark the session complete in your plan.</p>}
     {followups.filter(f=>f.conceptId===selected).map(f=><div className="notice" key={f.originalSessionId} style={{marginBottom:12}}>
