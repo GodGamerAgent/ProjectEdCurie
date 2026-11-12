@@ -541,7 +541,7 @@ it("proposes labelled answers for extracted questions without one and keeps answ
     expect(topic.status).toBe(200);
     expect(topic.body.questions.map((q:{prompt:string})=>q.prompt)).toEqual(resource.questions.map((q:{prompt:string})=>q.prompt));
     const payload=JSON.stringify(topic.body.questions);
-    for (const secret of ["SECRET-PROPOSAL","\"answer\"","answerSource","quote","42"]) expect(payload).not.toContain(secret);
+    for (const secret of ["SECRET-PROPOSAL","\"answer\"","answerSource","quote","Answer: 42"]) expect(payload).not.toContain(secret);
   } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
 });
 

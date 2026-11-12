@@ -28,7 +28,7 @@ CREATE INDEX "demo_resource_questions_resource" ON "demo_resource_questions" ("r
 --> statement-breakpoint
 INSERT INTO "demo_resource_questions" ("resource_id","position","origin","prompt","quote","source_ref","answer","answer_source")
 SELECT a."resource_id",
-  (part.ordinality * 1000 + problem.ordinality)::integer,
+  ((part.ordinality - 1) * 1000 + problem.ordinality - 1)::integer,
   'extracted',
   problem.value->>'prompt',
   coalesce(problem.value->>'quote',''),

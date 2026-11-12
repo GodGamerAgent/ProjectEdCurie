@@ -170,7 +170,7 @@ function TopicTutor({base,topic,onBack}:{base:string;topic:Topic;onBack:()=>void
       {busy && <p role="status">EdCurie is working on your reply…</p>}
     </div>
     {mode && turns.length>0 && <>
-      <div className="card-actions" aria-label="Suggested replies">{suggestions.map((suggestion,i)=><button className="button small" type="button" disabled={busy || recording} key={i} onClick={()=>void send(mode,suggestion)}>{suggestion}</button>)}</div>
+      <div className="card-actions" aria-label="Suggested replies">{suggestions.map((suggestion,i)=><button className="button small" type="button" disabled={busy || recording} key={i} onClick={()=>void send(mode,suggestion)}><Markdown compact text={suggestion}/></button>)}</div>
       <form className="stack" onSubmit={submit}>
         <MarkdownEditor label="Your question or answer" compact rows={3} maxLength={2000} value={draft} onChange={setDraft} disabled={busy}/>
         <label><input type="checkbox" checked={coding} onChange={e=>setCoding(e.target.checked)}/> Use code editor</label>
