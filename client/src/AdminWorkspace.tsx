@@ -17,6 +17,7 @@ export default function AdminWorkspace() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [aiStatus,setAiStatus]=useState<{configured:boolean;model:string}|null>(null);
   const active = institutes.find((item) => item.id === selected);
 
   const refresh = useCallback(async () => {
@@ -32,6 +33,7 @@ export default function AdminWorkspace() {
     setDomains(domainData.domains); setInvitations(invitationData.invitations);
   }, []);
   useEffect(() => { void refresh().catch((e) => setError(e.message)); }, [refresh]);
+  useEffect(()=>{void api<{configured:boolean;model:string}>("/api/admin/ai/status").then(setAiStatus).catch(()=>setAiStatus(null));},[]);
   useEffect(() => {
     let current = true;
     setName(active?.displayName ?? "");
@@ -100,6 +102,7 @@ export default function AdminWorkspace() {
     <section className="panel main-panel">
       <div className="eyebrow">Platform administration</div><h2>Set up institutes.</h2>
       <p className="muted">Create each institute, approve its email domains, and invite its teachers. The workspace starts empty.</p>
+      {aiStatus&&!aiStatus.configured&&<div className="notice" role="status"><strong>AI lessons are not configured.</strong><p>Add <code>GROQ_API_KEY</code> in Replit Tools → Secrets. The selected model is {aiStatus.model}. The key value is never shown here.</p></div>}
       {error && <div className="notice error" role="alert">{error}</div>}
       {message && <div className="notice success" role="status">{message}</div>}
       <form className="form-grid" onSubmit={createInstitute}>

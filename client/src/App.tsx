@@ -5,6 +5,7 @@ import { Redirect as WouterRedirect, Route, Router as WouterRouter, Switch, useL
 import { api, jsonBody } from "./api";
 import AdminWorkspace from "./AdminWorkspace";
 import SignupFieldHints from "./SignupFieldHints";
+import { StudentStudy, TeacherStudy } from "./StudyLoop";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -20,9 +21,9 @@ type InstituteBrand = { id: string; displayName: string; hasLogo: boolean };
 type Person = { id: string; email: string; role: "admin" | "teacher" | "student" | string; institute: InstituteBrand | null };
 type Course = { id: string | number; title: string; description: string; role?: string };
 type Resource = { id: string | number; title: string; status: string; extractionStatus?: string; text?: string; hasFile: boolean };
-type Question = { id: string | number; prompt: string; answer?: string; resourceId?: string | number };
+type Question = { id: string | number; prompt: string; answer?: string; resourceId?: string | number; conceptId?: string | null };
 type Assessment = { id: string | number; title: string; status: string; questions: Question[] };
-type CourseDetail = { course: Course; resources: Resource[]; assessments: Assessment[]; enrollments: { email: string }[] };
+type CourseDetail = { course: Course; resources: Resource[]; assessments: Assessment[]; enrollments: { email: string }[]; concepts: { id: string; name: string; resourceId: string }[] };
 type Preferences = { availability: string; feedback: string; hints: string; formats: string[] };
 type Onboarding = { state: string; message?: string };
 
@@ -209,7 +210,7 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
   const [resourceText, setResourceText] = useState("");
   const [resourceFile, setResourceFile] = useState<File | null>(null);
   const [assessmentTitle, setAssessmentTitle] = useState("");
-  const [questionByAssessment, setQuestionByAssessment] = useState<Record<string, { prompt: string; answer: string; resourceId: string }>>({});
+  const [questionByAssessment, setQuestionByAssessment] = useState<Record<string, { prompt: string; answer: string; resourceId: string; conceptId: string }>>({});
   const refresh = useCallback(async () => {
     setError("");
     try { const result = await api<CourseDetail>(`/api/courses/${courseId}`); setDetail(result); }
@@ -265,8 +266,8 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
     <form className="form-grid" onSubmit={newAssessment}><div className="field"><label htmlFor="assessment-title">Assessment title</label><input id="assessment-title" required value={assessmentTitle} onChange={(e) => setAssessmentTitle(e.target.value)} /></div><div className="field" style={{ alignSelf: "end" }}><button className="button primary" disabled={busy}>Create assessment draft</button></div></form>
     <div className="stack" style={{ marginTop: 17 }}>
       {detail.assessments.length ? detail.assessments.map((assessment) => {
-        const draft = questionByAssessment[String(assessment.id)] || { prompt: "", answer: "", resourceId: "" };
-        const setDraft = (field: "prompt" | "answer" | "resourceId", value: string) => setQuestionByAssessment((prev) => ({ ...prev, [String(assessment.id)]: { ...draft, [field]: value } }));
+        const draft = questionByAssessment[String(assessment.id)] || { prompt: "", answer: "", resourceId: "", conceptId: "" };
+        const setDraft = (field: "prompt" | "answer" | "resourceId" | "conceptId", value: string) => setQuestionByAssessment((prev) => ({ ...prev, [String(assessment.id)]: { ...draft, [field]: value } }));
         return <article className="assessment-card" key={assessment.id}>
           <div className="row"><div><h3>{assessment.title}</h3><span className={`badge ${assessment.status.toLowerCase() === "published" ? "green" : "amber"}`}>{assessment.status}</span></div>
             {assessment.status.toLowerCase() !== "published" && <button className="button small success" disabled={busy} onClick={() => void run(() => api(`/api/assessments/${assessment.id}/publish`, { method: "POST" }), "Assessment published.")}>Publish assessment</button>}
@@ -276,18 +277,20 @@ function CourseWorkspace({ courseId, onBack }: { courseId: string | number; onBa
             event.preventDefault();
             if (!draft.resourceId) { setError("Select a source resource for this question."); return; }
             void run(async () => {
-              await api(`/api/assessments/${assessment.id}/questions`, { method: "POST", body: jsonBody({ prompt: draft.prompt.trim(), answer: draft.answer.trim(), resourceId: draft.resourceId }) });
-              setQuestionByAssessment((prev) => ({ ...prev, [String(assessment.id)]: { prompt: "", answer: "", resourceId: "" } }));
+              await api(`/api/assessments/${assessment.id}/questions`, { method: "POST", body: jsonBody({ prompt: draft.prompt.trim(), answer: draft.answer.trim(), resourceId: draft.resourceId, conceptId: draft.conceptId || null }) });
+              setQuestionByAssessment((prev) => ({ ...prev, [String(assessment.id)]: { prompt: "", answer: "", resourceId: "", conceptId: "" } }));
             }, "Question added to assessment.");
           }}>
             <div className="field full"><label htmlFor={`prompt-${assessment.id}`}>Question prompt</label><textarea id={`prompt-${assessment.id}`} required value={draft.prompt} onChange={(e) => setDraft("prompt", e.target.value)} /></div>
             <div className="field"><label htmlFor={`answer-${assessment.id}`}>Expected answer</label><textarea id={`answer-${assessment.id}`} required value={draft.answer} onChange={(e) => setDraft("answer", e.target.value)} /></div>
             <div className="field"><label htmlFor={`source-${assessment.id}`}>Source resource</label><select id={`source-${assessment.id}`} required value={draft.resourceId} onChange={(e) => setDraft("resourceId", e.target.value)}><option value="">Choose a course resource</option>{detail.resources.map((resource) => <option key={resource.id} value={resource.id}>{resource.title}</option>)}</select></div>
+            <div className="field"><label htmlFor={`concept-${assessment.id}`}>Concept for mastery</label><select id={`concept-${assessment.id}`} value={draft.conceptId} onChange={(e) => setDraft("conceptId", e.target.value)}><option value="">No concept linked</option>{detail.concepts.map((concept) => <option key={concept.id} value={concept.id}>{concept.name}</option>)}</select></div>
             <div className="field"><button className="button small primary" disabled={busy}>Add question</button></div>
           </form>}
         </article>;
       }) : <div className="empty"><span className="empty-mark">03</span><h3>No baseline assessment</h3><p>Create an assessment draft to author questions for this course.</p></div>}
     </div>
+    <TeacherStudy courseId={courseId} resources={detail.resources} assessments={detail.assessments} concepts={detail.concepts} refresh={refresh} />
   </div>;
 }
 
@@ -350,6 +353,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [onboarding, setOnboarding] = useState<Onboarding | null>(null);
   const [questions, setQuestions] = useState<{ id: string | number; prompt: string }[] | null>(null);
+  const [assessmentSessionId, setAssessmentSessionId] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [assessmentError, setAssessmentError] = useState("");
@@ -358,14 +362,16 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
   const [starting, setStarting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [baselineResult, setBaselineResult] = useState<{ score: number; total: number } | null>(null);
   const refresh = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [courseResult, state] = await Promise.all([
+      const [courseResult, state, baseline] = await Promise.all([
         api<CourseDetail>(`/api/courses/${courseId}`),
         api<Onboarding>(`/api/courses/${courseId}/onboarding`),
+        api<{result: {score:number;total:number}|null}>(`/api/courses/${courseId}/assessment/result`),
       ]);
-      setDetail(courseResult); setOnboarding(state); setQuestions(null); setAnswers({}); setSubmitted(false); setAssessmentNotice("");
+      setDetail(courseResult); setOnboarding(state); setBaselineResult(baseline.result); setQuestions(null); setAssessmentSessionId(""); setAnswers({}); setSubmitted(false); setAssessmentNotice("");
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to open course."); }
     finally { setLoading(false); }
   }, [courseId]);
@@ -373,9 +379,10 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
   const start = async () => {
     setStarting(true); setError(""); setAssessmentError(""); setAssessmentNotice("");
     try {
-      const result = await api<{ questions: { id: string | number; prompt: string }[] }>(`/api/courses/${courseId}/assessment/start`, { method: "POST" });
+      const result = await api<{ sessionId:string; questions: { id: string | number; prompt: string }[]; answers:Record<string,string> }>(`/api/courses/${courseId}/assessment/start`, { method: "POST" });
       setQuestions(result.questions);
-      setAnswers(Object.fromEntries(result.questions.map((question) => [String(question.id), ""])));
+      setAssessmentSessionId(result.sessionId);
+      setAnswers(Object.fromEntries(result.questions.map((question) => [String(question.id), result.answers[String(question.id)] || ""])));
       setSubmitted(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The baseline assessment could not be started.");
@@ -387,12 +394,13 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
     if (!questions) return;
     setSubmitting(true); setAssessmentError(""); setAssessmentNotice("");
     try {
-      await api(`/api/courses/${courseId}/assessment/submit`, {
+      const result = await api<{score:number;total:number}>(`/api/courses/${courseId}/assessment/submit`, {
         method: "POST",
-        body: jsonBody({ answers: Object.fromEntries(questions.map((question) => [String(question.id), answers[String(question.id)] || ""])) }),
+        body: jsonBody({ sessionId:assessmentSessionId, answers: Object.fromEntries(questions.map((question) => [String(question.id), answers[String(question.id)] || ""])) }),
       });
       setSubmitted(true);
-      setAssessmentNotice("Your assessment responses were submitted successfully.");
+      setBaselineResult(result);
+      setAssessmentNotice(`Baseline result: ${result.score} out of ${result.total}. Objective answers are matched exactly, ignoring case and extra spaces.`);
     } catch (e) {
       setAssessmentError(e instanceof Error ? e.message : "Your responses could not be submitted. Your answers are still here; try again.");
     } finally { setSubmitting(false); }
@@ -416,6 +424,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
           <button className="button" onClick={() => void refresh()}>Check readiness</button>}
       </aside>
     </div>
+    {baselineResult && <div className="notice success" role="status" style={{marginTop:20}}>Latest baseline result: {baselineResult.score} / {baselineResult.total}</div>}
     {questions && <section aria-labelledby="baseline-title" style={{ marginTop: 30 }}>
       <div className="eyebrow">Baseline assessment</div><h3 id="baseline-title">Assessment questions</h3>
       {assessmentNotice && <div className="notice success" role="status">{assessmentNotice}</div>}
@@ -426,11 +435,13 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
           <p style={{ margin: "12px 0 0" }}>{question.prompt}</p>
           <div className="field" style={{ marginTop: 12 }}><label htmlFor={`student-answer-${question.id}`}>Your response</label>
             <textarea id={`student-answer-${question.id}`} required value={answers[String(question.id)] || ""} disabled={submitted || submitting}
+              onBlur={(event) => void api("/api/assessment-sessions/"+assessmentSessionId+"/answers",{method:"PUT",body:jsonBody({answers:{[String(question.id)]:event.currentTarget.value}})}).catch((e)=>setAssessmentError(e.message))}
               onChange={(event) => setAnswers((previous) => ({ ...previous, [String(question.id)]: event.target.value }))} /></div>
         </div>)}
         <button className="button primary" type="submit" disabled={submitting || submitted}>{submitting ? "Submitting…" : submitted ? "Submitted" : "Submit assessment"}</button>
       </form> : <div className="empty" style={{ marginTop: 14 }}><h3>No questions were returned</h3><p>Refresh readiness and try again, or contact your course teacher.</p></div>}
     </section>}
+    {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentStudy key={String(courseId)} courseId={courseId} baselineReady={Boolean(ready&&baselineResult)} />}
   </div>;
 }
 

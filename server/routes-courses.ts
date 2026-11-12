@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { Pool } from "pg";
 import { HttpError } from "./auth";
-import { cleanString, courseAccess, currentUser, eligibility, normalizeEmail, requireRole, teacherCourse } from "./access";
+import { cleanString, courseAccess, currentUser, eligibility, normalizeEmail, requireRole, teacherCourse, uuid } from "./access";
 
 export function courseRoutes(db: Pool) {
   const router = Router();
@@ -36,11 +36,12 @@ export function courseRoutes(db: Pool) {
     const assessments = await db.query(`SELECT id,title,status FROM assessments WHERE course_id=$1 ${teacher ? "" : "AND status='published'"} ORDER BY created_at`, [course.id]);
     const enriched = [];
     for (const a of assessments.rows) {
-      const q = teacher ? await db.query("SELECT id,prompt,answer,resource_id AS \"resourceId\" FROM questions WHERE assessment_id=$1 ORDER BY id", [a.id]) : { rows: [] };
+      const q = teacher ? await db.query("SELECT id,prompt,answer,resource_id AS \"resourceId\",concept_id AS \"conceptId\" FROM questions WHERE assessment_id=$1 ORDER BY id", [a.id]) : { rows: [] };
       enriched.push({ ...a, questions: q.rows });
     }
     const enrollments = teacher ? await db.query("SELECT email FROM enrollments WHERE course_id=$1 ORDER BY email", [course.id]) : { rows: [] };
-    res.json({ course, resources: resources.rows, assessments: enriched, enrollments: enrollments.rows });
+    const concepts = await db.query("SELECT id,name,resource_id AS \"resourceId\" FROM concepts WHERE course_id=$1 ORDER BY created_at", [course.id]);
+    res.json({ course, resources: resources.rows, assessments: enriched, enrollments: enrollments.rows, concepts: concepts.rows });
   });
   router.post("/api/courses/:id/enrollments", async (req, res) => {
     const user = currentUser(res); const access = await teacherCourse(db, user, req.params.id);
@@ -59,28 +60,63 @@ export function courseRoutes(db: Pool) {
   router.post("/api/courses/:id/assessment/start", async (req, res) => {
     const user = currentUser(res); requireRole(user, "student");
     await courseAccess(db, user, req.params.id);
+    const active = await db.query(`SELECT id,questions,answers FROM assessment_sessions WHERE user_id=$1 AND course_id=$2 AND status='active' ORDER BY created_at DESC LIMIT 1`, [user.id, req.params.id]);
+    if (active.rowCount) return res.json({sessionId:active.rows[0].id,questions:active.rows[0].questions.map(({id,prompt}:any)=>({id,prompt})),answers:active.rows[0].answers});
     const gate = await eligibility(db, req.params.id);
     if (!gate.assessmentId) throw new HttpError(403, gate.message);
-    const questions = await db.query(`SELECT q.id,q.prompt FROM questions q JOIN resources r ON r.id=q.resource_id
+    const questions = await db.query(`SELECT q.id,q.prompt,q.answer,q.concept_id FROM questions q JOIN resources r ON r.id=q.resource_id
       WHERE q.assessment_id=$1 AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0
       AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0 ORDER BY q.id`, [gate.assessmentId, req.params.id]);
-    res.json({ questions: questions.rows });
+    if (!questions.rowCount) throw new HttpError(403,gate.message);
+    const session=await db.query(`INSERT INTO assessment_sessions (user_id,course_id,assessment_id,questions)
+      VALUES ($1,$2,$3,$4::jsonb) RETURNING id`,[user.id,req.params.id,gate.assessmentId,JSON.stringify(questions.rows.map((q)=>({id:q.id,prompt:q.prompt,answer:q.answer,conceptId:q.concept_id})))]);
+    res.json({sessionId:session.rows[0].id,questions:questions.rows.map(({id,prompt})=>({id,prompt})),answers:{}});
+  });
+  router.put("/api/assessment-sessions/:id/answers", async (req,res)=>{
+    const user=currentUser(res);requireRole(user,"student");
+    const sessionId=uuid(req.params.id);
+    const session=await db.query("SELECT course_id,questions,status FROM assessment_sessions WHERE id=$1 AND user_id=$2",[sessionId,user.id]);
+    if(!session.rowCount)throw new HttpError(404,"Assessment session not found.");
+    await courseAccess(db,user,session.rows[0].course_id);
+    if(session.rows[0].status!=="active")throw new HttpError(409,"This assessment session is already submitted.");
+    const answers=req.body.answers;
+    const ids=new Set(session.rows[0].questions.map((q:any)=>q.id));
+    if(!answers||typeof answers!=="object"||Array.isArray(answers)||Object.entries(answers).some(([id,value])=>!ids.has(id)||typeof value!=="string"||value.length>5000))throw new HttpError(400,"Invalid assessment answers.");
+    await db.query("UPDATE assessment_sessions SET answers=answers || $3::jsonb,updated_at=now() WHERE id=$1 AND user_id=$2 AND status='active'",[sessionId,user.id,JSON.stringify(answers)]);
+    res.json({saved:true});
   });
   router.post("/api/courses/:id/assessment/submit", async (req, res) => {
     const user = currentUser(res); requireRole(user, "student");
-    await courseAccess(db, user, req.params.id);
-    const gate = await eligibility(db, req.params.id);
-    if (!gate.assessmentId) throw new HttpError(403, gate.message);
-    const questions = await db.query(`SELECT q.id FROM questions q JOIN resources r ON r.id=q.resource_id
-      WHERE q.assessment_id=$1 AND r.course_id=$2 AND r.status='published' AND length(btrim(r.text))>0
-      AND length(btrim(q.prompt))>0 AND length(btrim(q.answer))>0`, [gate.assessmentId, req.params.id]);
-    const answers = req.body.answers;
+    const sessionId=typeof req.body?.sessionId==="string"?uuid(req.body.sessionId):"";
+    const session=await db.query("SELECT id,assessment_id,questions,answers,status,score,total,course_id FROM assessment_sessions WHERE id=$1 AND user_id=$2 AND course_id=$3",[sessionId,user.id,req.params.id]);
+    if(!session.rowCount)throw new HttpError(404,"Assessment session not found.");
+    await courseAccess(db,user,req.params.id);
+    if(session.rows[0].status==="submitted")return res.json({message:"Your baseline was already submitted.",score:session.rows[0].score,total:session.rows[0].total,details:[]});
+    const questions={rows:session.rows[0].questions} as any;
+    const answers={...session.rows[0].answers,...(req.body.answers||{})};
     if (!answers || typeof answers !== "object" || Array.isArray(answers) || Object.keys(answers).length !== questions.rows.length ||
-        questions.rows.some((q) => typeof answers[q.id] !== "string" || !answers[q.id].trim() || answers[q.id].length > 5000)) {
+        questions.rows.some((q:any) => typeof answers[q.id] !== "string" || !answers[q.id].trim() || answers[q.id].length > 5000)) {
       throw new HttpError(400, "Answer every available question before submitting.");
     }
-    await db.query("INSERT INTO baseline_submissions (assessment_id,user_id,answers) VALUES ($1,$2,$3::jsonb)", [gate.assessmentId, user.id, JSON.stringify(answers)]);
-    res.status(201).json({ message: "Your answers were saved." });
+    const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+    const details: { questionId: string; conceptId: string | null; correct: boolean }[] = questions.rows.map((q:any) => ({ questionId: q.id, conceptId: q.conceptId, correct: normalize(answers[q.id]) === normalize(q.answer) }));
+    const score = details.filter((q) => q.correct).length;
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const locked=await client.query("SELECT status,score,total FROM assessment_sessions WHERE id=$1 AND user_id=$2 FOR UPDATE",[sessionId,user.id]);
+      if(locked.rows[0].status==="submitted"){await client.query("COMMIT");return res.json({message:"Your baseline was already submitted.",score:locked.rows[0].score,total:locked.rows[0].total,details:[]});}
+      await client.query("INSERT INTO baseline_submissions (assessment_id,user_id,answers,score,total,details) VALUES ($1,$2,$3::jsonb,$4,$5,$6::jsonb)", [session.rows[0].assessment_id, user.id, JSON.stringify(answers), score, details.length, JSON.stringify(details)]);
+      for (const item of details) if (item.conceptId) await client.query("INSERT INTO study_attempts (user_id,course_id,concept_id,kind,correct,assisted) SELECT $1,$2,id,'baseline',$4,false FROM concepts WHERE id=$3 AND course_id=$2", [user.id, req.params.id, item.conceptId, item.correct]);
+      await client.query("UPDATE assessment_sessions SET status='submitted',answers=$2::jsonb,score=$3,total=$4,updated_at=now() WHERE id=$1",[sessionId,JSON.stringify(answers),score,details.length]);
+      await client.query("COMMIT");
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+    res.status(201).json({ message: "Your answers were saved.", score, total: details.length, details });
+  });
+  router.get("/api/courses/:id/assessment/result", async (req, res) => {
+    const user = currentUser(res); requireRole(user, "student"); await courseAccess(db, user, req.params.id);
+    const result = await db.query(`SELECT b.score,b.total,b.details,b.created_at AS "createdAt" FROM baseline_submissions b JOIN assessments a ON a.id=b.assessment_id WHERE a.course_id=$1 AND b.user_id=$2 AND b.score IS NOT NULL ORDER BY b.created_at DESC LIMIT 1`, [req.params.id, user.id]);
+    res.json({ result: result.rows[0] ?? null });
   });
   return router;
 }

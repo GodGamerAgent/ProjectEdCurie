@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex, jsonb, customType } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, uuid, text, timestamp, uniqueIndex, jsonb, customType, integer, boolean } from "drizzle-orm/pg-core";
 
 const bytes = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
@@ -54,6 +55,17 @@ export const resources = pgTable("resources", {
   fileData: bytes("file_data"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
+export const concepts = pgTable("concepts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  name: text("name").notNull(),
+  resourceId: uuid("resource_id").notNull().references(() => resources.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const conceptPrerequisites = pgTable("concept_prerequisites", {
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  prerequisiteId: uuid("prerequisite_id").notNull().references(() => concepts.id)
+}, (table) => [uniqueIndex("concept_prerequisites_unique").on(table.conceptId, table.prerequisiteId)]);
 export const assessments = pgTable("assessments", {
   id: uuid("id").defaultRandom().primaryKey(),
   courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
@@ -66,7 +78,8 @@ export const questions = pgTable("questions", {
   assessmentId: uuid("assessment_id").notNull().references(() => assessments.id, { onDelete: "cascade" }),
   resourceId: uuid("resource_id").notNull().references(() => resources.id),
   prompt: text("prompt").notNull(),
-  answer: text("answer").notNull()
+  answer: text("answer").notNull(),
+  conceptId: uuid("concept_id").references(() => concepts.id)
 });
 export const preferences = pgTable("student_preferences", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
@@ -80,5 +93,78 @@ export const baselineSubmissions = pgTable("baseline_submissions", {
   assessmentId: uuid("assessment_id").notNull().references(() => assessments.id),
   userId: uuid("user_id").notNull().references(() => users.id),
   answers: jsonb("answers").$type<Record<string, string>>().notNull(),
+  score: integer("score"),
+  total: integer("total"),
+  details: jsonb("details").$type<{ questionId: string; conceptId: string | null; correct: boolean }[]>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const assessmentSessions = pgTable("assessment_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  assessmentId: uuid("assessment_id").notNull().references(() => assessments.id),
+  questions: jsonb("questions").$type<{id:string;prompt:string;answer:string;conceptId:string|null}[]>().notNull(),
+  answers: jsonb("answers").$type<Record<string,string>>().notNull().default({}),
+  status: text("status").notNull().default("active"),
+  score: integer("score"),
+  total: integer("total"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+}, (table) => [uniqueIndex("assessment_sessions_one_active_per_course").on(table.userId,table.courseId).where(sql`${table.status}='active'`)]);
+export const studyGoals = pgTable("study_goals", {
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  goal: text("goal").notNull(),
+  deadline: text("deadline").notNull(),
+  availability: text("availability").notNull().default("")
+}, (table) => [uniqueIndex("study_goals_unique").on(table.userId, table.courseId)]);
+export const practiceProblems = pgTable("practice_problems", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  questionId: uuid("question_id").notNull().references(() => questions.id),
+  prompt: text("prompt").notNull(),
+  answer: text("answer").notNull(),
+  hints: jsonb("hints").$type<string[]>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const practiceSessions = pgTable("practice_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  problemId: uuid("problem_id").notNull().references(() => practiceProblems.id),
+  kind: text("kind").notNull().default("practice"),
+  hintCount: integer("hint_count").notNull().default(0),
+  submitted: boolean("submitted").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const studyAttempts = pgTable("study_attempts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  sessionId: uuid("session_id").references(() => practiceSessions.id),
+  kind: text("kind").notNull(),
+  correct: boolean("correct").notNull(),
+  assisted: boolean("assisted").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const tutorLessons = pgTable("tutor_lessons", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  explanation: text("explanation").notNull(),
+  citations: jsonb("citations").$type<{resourceId:string;title:string;location:string}[]>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+export const aiGenerations = pgTable("ai_generations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  courseId: uuid("course_id").notNull().references(() => courses.id),
+  conceptId: uuid("concept_id").notNull().references(() => concepts.id),
+  model: text("model").notNull(),
+  status: text("status").notNull(),
+  durationMs: integer("duration_ms"),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  errorCategory: text("error_category"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });

@@ -22,6 +22,34 @@
       "when": 1794457214778,
       "tag": "0002_spooky_scream",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794460966530,
+      "tag": "0003_red_victor_mancha",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794461025188,
+      "tag": "0004_tense_bushwacker",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794461523501,
+      "tag": "0005_mushy_korath",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794461672249,
+      "tag": "0006_premium_thunderbird",
+      "breakpoints": true
     }
   ]
 }

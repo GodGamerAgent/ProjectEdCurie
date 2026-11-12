@@ -1,11 +1,13 @@
 import express, { type Request } from "express";
 import { clerkClient } from "@clerk/express";
 import type { Pool } from "pg";
+import { randomUUID } from "node:crypto";
 import { HttpError, authConfigured, type AppUser } from "./auth";
 import { currentUser, requireRole } from "./access";
 import { courseRoutes } from "./routes-courses";
 import { materialRoutes } from "./routes-materials";
 import { instituteRoutes } from "./routes-institutes";
+import { studyRoutes } from "./routes-study";
 
 type Resolver = (req: Request) => Promise<AppUser>;
 type InviteSender = (email: string) => Promise<void>;
@@ -13,6 +15,7 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   await clerkClient.invitations.createInvitation({ emailAddress: email });
 }) {
   const app = express();
+  app.use((_req,res,next)=>{res.locals.requestId=randomUUID();res.setHeader("X-Request-ID",res.locals.requestId);next();});
   app.use(express.json({ limit: "1mb" }));
   app.get("/api/config", (_req, res) => res.json({ authEnabled: authConfigured() }));
   app.use("/api", async (req, res, next) => {
@@ -26,6 +29,10 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
       institute = result.rows[0] ?? null;
     }
     res.json({ id: user.id, email: user.email, role: user.role, institute });
+  });
+  app.get("/api/admin/ai/status",async(_req,res)=>{
+    requireRole(currentUser(res),"admin");
+    res.json({configured:Boolean(process.env.GROQ_API_KEY),model:process.env.GROQ_MODEL?.trim()||"qwen/qwen3.8-27b"});
   });
   app.get("/api/preferences", async (_req, res) => {
     const user = currentUser(res); requireRole(user, "student");
@@ -43,12 +50,14 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   app.use(instituteRoutes(db, inviteSender));
   app.use(courseRoutes(db));
   app.use(materialRoutes(db));
+  app.use(studyRoutes(db));
   app.use("/api", (_req, res) => res.status(404).json({ error: "Not found." }));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
-    if (error instanceof Error && "code" in error && error.code === "LIMIT_FILE_SIZE") return res.status(400).json({ error: "File is too large." });
-    console.error("Request failed unexpectedly.");
-    return res.status(500).json({ error: "Something went wrong. Please try again." });
+    const requestId=String(res.locals.requestId||"unknown");
+    if (error instanceof HttpError) return res.status(error.status).json({ error: error.message,requestId });
+    if (error instanceof Error && "code" in error && error.code === "LIMIT_FILE_SIZE") return res.status(400).json({ error: "File is too large.",requestId });
+    console.error(`Request ${requestId} failed unexpectedly: ${error instanceof Error?error.name:"unknown error"}: ${error instanceof Error?error.message:"no message"}`);
+    return res.status(500).json({ error: "Something went wrong. Please try again.",requestId });
   });
   return app;
 }

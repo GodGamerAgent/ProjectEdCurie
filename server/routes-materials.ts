@@ -81,6 +81,17 @@ export function materialRoutes(db: Pool) {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.send(file.rows[0].file_data);
   });
+  router.get("/api/resources/:id/excerpt",async(req,res)=>{
+    const resource=await resourceById(db,String(req.params.id));
+    const access=await courseAccess(db,currentUser(res),resource.course_id);
+    if(!access.teacher&&(resource.status!=="published"||!resource.text.trim()))throw new HttpError(404,"Resource not found.");
+    const location=typeof req.query.location==="string"?req.query.location:"";
+    if(!/^Page \d+$/.test(location)&&location!=="Section 1")throw new HttpError(400,"Choose a valid source section.");
+    const parts=String(resource.text).split(/(?=\[Page \d+\])/).filter((x)=>x.trim());
+    const text=location==="Section 1"?(parts.find((x)=>!x.match(/^\[Page \d+\]/))||parts[0]):parts.find((x)=>x.match(/^\[Page (\d+)\]/)?.[1]===location.slice(5));
+    if(!text)throw new HttpError(404,"That source section is not available.");
+    res.json({title:resource.title,location,text:text.slice(0,20000)});
+  });
   router.post("/api/courses/:id/assessments", async (req, res) => {
     await teacherCourse(db, currentUser(res), req.params.id);
     const title = cleanString(req.body.title, "Assessment title", 200);
@@ -95,11 +106,13 @@ export function materialRoutes(db: Pool) {
     const resourceId = uuid(cleanString(req.body.resourceId, "Source resource", 36));
     const source = await db.query("SELECT 1 FROM resources WHERE id=$1 AND course_id=$2", [resourceId, assessment.course_id]);
     if (!source.rowCount) throw new HttpError(400, "The source resource must belong to this course.");
+    const conceptId = req.body.conceptId ? uuid(cleanString(req.body.conceptId, "Concept", 36)) : null;
+    if (conceptId && !(await db.query("SELECT 1 FROM concepts WHERE id=$1 AND course_id=$2", [conceptId, assessment.course_id])).rowCount) throw new HttpError(400, "The concept must belong to this course.");
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-      const result = await client.query(`INSERT INTO questions (assessment_id,resource_id,prompt,answer)
-        VALUES ($1,$2,$3,$4) RETURNING id,prompt,answer,resource_id AS "resourceId"`, [assessment.id, resourceId, prompt, answer]);
+      const result = await client.query(`INSERT INTO questions (assessment_id,resource_id,prompt,answer,concept_id)
+        VALUES ($1,$2,$3,$4,$5) RETURNING id,prompt,answer,resource_id AS "resourceId",concept_id AS "conceptId"`, [assessment.id, resourceId, prompt, answer, conceptId]);
       await client.query("UPDATE assessments SET status='draft' WHERE id=$1", [assessment.id]);
       await client.query("COMMIT");
       res.status(201).json(result.rows[0]);
