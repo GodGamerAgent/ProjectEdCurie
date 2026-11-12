@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, jsonBody } from "./api";
 import TwinLinker from "./TwinLinker";
 import { StudentSchedule, TeacherTimetable } from "./Timetable";
+import { TeacherAssignments } from "./AssignmentPanels";
 
 type Concept = { id: string; name: string; resourceId: string; prerequisites?: {id:string;name:string}[] };
 type Resource = { id: string | number; title: string };
@@ -118,6 +119,7 @@ export function TeacherStudy({ courseId, resources, assessments, concepts, refre
     </>}
     <TwinLinker courseId={courseId} revision={assessments}/>
     <TeacherTimetable courseId={courseId} concepts={concepts}/>
+    <TeacherAssignments courseId={courseId}/>
     <div className="divider"/><div className="row"><h3>Student progress</h3><button className="button small" type="button" onClick={()=>void loadProgress().catch((e)=>setError(e.message))}>Refresh progress</button></div>
     {progress.length ? <div className="stack">{progress.map((p)=><div className="course-card" key={`${p.studentId}-${p.conceptId}`}><strong>{p.email} · {p.name}</strong><p>{p.status} · Independent {p.independent_correct}/{p.independent_attempts} · Assisted {p.assisted_correct}/{p.assisted_attempts}</p></div>)}</div> : <p className="muted">Progress appears once students and concepts are available.</p>}
   </section>;

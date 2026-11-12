@@ -473,6 +473,36 @@ describe("foundation access and onboarding", () => {
     const after=(await request(app).get(`/api/courses/${course.id}/mastery`).set(as("student"))).body.concepts;
     expect(after.map((c:any)=>c.independent_attempts)).toEqual(before.map((c:any)=>c.independent_attempts));
   });
+  it("routes assignment submissions through teacher review before exposing diagnosis",async()=>{
+    const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated assignment review"})).body;
+    expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);
+    const created=await request(app).post(`/api/courses/${course.id}/assignments`).set(as("teacher")).send({
+      title:"Explain the result",instructions:"Show your reasoning and cite the class notes.",rubric:["Reasoning uses course material"],dueAt:"2026-12-10T17:00:00.000Z"
+    });
+    expect(created.status).toBe(201);
+    expect((await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments).toHaveLength(0);
+    expect((await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student")).send({response:"My answer",confidence:4})).status).toBe(404);
+    expect((await request(app).post(`/api/assignments/${created.body.id}/publish`).set(as("teacher"))).status).toBe(200);
+    const visible=(await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments[0];
+    expect(visible).toMatchObject({title:"Explain the result",submissionId:null});
+    const baselineBefore=(await db.query("SELECT count(*) FROM study_attempts WHERE user_id=$1 AND course_id=$2 AND kind='practice'",[actors.student.id,course.id])).rows[0].count;
+    const submission=await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student")).send({response:"The response",diagnosis:"I was unsure about the units.",confidence:2});
+    expect(submission.status).toBe(201);
+    const pending=(await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments[0];
+    expect(pending).toMatchObject({submissionStatus:"submitted",score:null,teacherFeedback:null});
+    const teacherRows=await request(app).get(`/api/assignments/${created.body.id}/submissions`).set(as("teacher"));
+    expect(teacherRows.body.submissions[0]).toMatchObject({email:actors.student.email,diagnosis:"I was unsure about the units.",confidence:2});
+    expect((await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("otherTeacher")).send({score:80,feedback:"Reviewed",rubricScores:[3]})).status).toBe(403);
+    expect((await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("teacher")).send({score:80,feedback:"Reviewed",rubricScores:[5]})).status).toBe(400);
+    const reviewed=await request(app).post(`/api/assignment-submissions/${submission.body.id}/review`).set(as("teacher")).send({
+      score:86,feedback:"Your explanation is clear; check the units.",rubricScores:[3],misconception:"Unit conversion"
+    });
+    expect(reviewed.status).toBe(200);
+    const privateResult=(await request(app).get(`/api/courses/${course.id}/assignments`).set(as("student"))).body.assignments[0];
+    expect(privateResult).toMatchObject({submissionStatus:"reviewed",score:86,teacherFeedback:"Your explanation is clear; check the units.",misconception:"Unit conversion"});
+    expect((await request(app).post(`/api/assignments/${created.body.id}/submissions`).set(as("student")).send({response:"replace",confidence:5})).status).toBe(409);
+    expect((await db.query("SELECT count(*) FROM study_attempts WHERE user_id=$1 AND course_id=$2 AND kind='practice'",[actors.student.id,course.id])).rows[0].count).toBe(baselineBefore);
+  });
   it("keeps weekly timetable, student availability, and personal commitments correctly scoped", async()=>{
     const course=(await request(app).post("/api/courses").set(as("teacher")).send({title:"Isolated timetable"})).body;
     expect((await request(app).post(`/api/courses/${course.id}/enrollments`).set(as("teacher")).send({email:actors.student.email})).status).toBe(201);

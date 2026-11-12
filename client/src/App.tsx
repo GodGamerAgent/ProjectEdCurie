@@ -6,6 +6,7 @@ import { api, jsonBody } from "./api";
 import AdminWorkspace from "./AdminWorkspace";
 import SignupFieldHints from "./SignupFieldHints";
 import { StudentStudy, TeacherStudy } from "./StudyLoop";
+import { StudentAssignments } from "./AssignmentPanels";
 
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -471,6 +472,7 @@ function StudentCourse({ courseId }: { courseId: string | number }) {
       </form> : <div className="empty" style={{ marginTop: 14 }}><h3>No questions were returned</h3><p>Refresh readiness and try again, or contact your course teacher.</p></div>}
     </section>}
     {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentStudy key={String(courseId)} courseId={courseId} baselineReady={Boolean(ready&&baselineResult)} />}
+    {onboarding?.state.toLowerCase() !== "unenrolled" && <StudentAssignments courseId={courseId}/>}
   </div>;
 }
 

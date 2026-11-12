@@ -13,6 +13,7 @@ import { planningRoutes } from "./routes-planning";
 import { planRoutes } from "./routes-plans";
 import { reviewRoutes } from "./routes-reviews";
 import { mockRoutes } from "./routes-mocks";
+import { assignmentRoutes } from "./routes-assignments";
 
 type Resolver = (req: Request) => Promise<AppUser>;
 type InviteSender = (email: string) => Promise<void>;
@@ -61,6 +62,7 @@ export function createApi(db: Pool, resolveUser: Resolver, inviteSender: InviteS
   app.use(planRoutes(db));
   app.use(reviewRoutes(db));
   app.use(mockRoutes(db));
+  app.use(assignmentRoutes(db));
   app.use("/api", (_req, res) => res.status(404).json({ error: "Not found." }));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const requestId=String(res.locals.requestId||"unknown");

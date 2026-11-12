@@ -2,9 +2,9 @@
 
 Updated: 2026-11-12
 
-**Current checkpoint:** the learning loop includes immutable source/question history, citation-validated Groq lessons with source-grounded checks, prerequisite diagnosis, focused practice, teacher-linked twins, attempt-based mastery, FSRS review, and adaptive mocks. Mocks prioritize topics with incorrect/limited evidence, persist answers and results, and reveal the key only after submission; mock scores do not change mastery. Weekly class schedules, private availability/commitments, workload estimates, feasibility, and phased plans are implemented. Isolation and authorization checks pass. Live Groq and real NST sign-in remain unverified. No fixtures were added to development or production.
+**Current checkpoint:** the learning loop includes immutable resource/question versions, source-grounded lessons, prerequisite diagnosis, focused practice, teacher-linked twins, attempt-based mastery, FSRS review, adaptive mocks, and assignments. Students can submit a written response, confidence, and self-diagnosis; teachers manually score the rubric and add a diagnosis/feedback. Assignment results stay separate from mastery. Schedules, private availability, feasibility, and deadline-preserving study plans work. Isolation tests pass; live Groq and real NST sign-in remain unverified. No fixtures were added to development or production.
 
-**Next unfinished implementation task: assignment diagnosis and grading.** Add assignment imports, diagnosis, and teacher review/correction; keep uncertain grading out of mastery until a teacher verifies it.
+**Next unfinished implementation task: teacher analytics.** Add evidence timelines and schedule completion views so teachers can review concept progress, assignment diagnosis, and learning activity.
 
 **Linked-twin manual walkthrough:** in the assigned teacher's course, create two distinct practice questions for the same concept, then use **Link an independent twin** to pair them. As an enrolled student with a completed baseline, submit the original, choose **Solve linked twin**, and answer without hints. Verify the independent count increases once. With another authorized student or fresh teacher-authored pair, request a hint on the twin and verify only assisted evidence increases. Refresh to verify **Resume linked twin** retains used hints. Use real accounts/material only; fixtures belong exclusively in `npm run test:isolated`.
 
@@ -33,7 +33,7 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | 17 | FSRS retrieval | Student Review Vault lists due questions, starts recall, and reveals the expected answer only after submission | FSRS-7 state, due dates, review logs, sessions, and outcomes persist; answer retries are idempotent; hint-free review updates distinct-question mastery | **Implemented and isolated-tested.** Live timing/interaction walkthrough with an NST account remains. |
 | 18 | Classroom-grounded solutions | Concept-specific published excerpt supplies citations; student can open the authorized source section | Server validates citations and persists resource/question version snapshots for lessons and assessment sessions | **Implemented for this loop / pending live test.** Teacher version-history screens are available. |
 | 19 | Voice | No voice mode | None | **Not started.** |
-| 20 | Test and assignment diagnosis | Objective baseline only | Deterministic normalized exact-match grading; saved result | **Partial.** No assignments, imports, rubrics, uncertain grading or teacher correction. |
+| 20 | Test and assignment diagnosis | Teacher publishes assignments/rubric; student submits work, confidence, and reflection; teacher manually reviews rubric scores and diagnosis; student sees feedback | Enrollment and course-teacher authorization, draft/published state, private submission/review records; assignment evidence stays out of mastery | **Partial.** Written-response flow is isolated-tested. No file imports, rubric assistance, automatic uncertainty/error diagnosis, or verified-outcome link to mastery. |
 | 21 | Targeted micro-practice | Student sees up to five focus topics based on incorrect/absent evidence and can start a teacher-approved problem | Published same-course source and question are required; used and twin-reserved problems are excluded | **Partial.** Single-question sessions only; no generated multi-question set or teacher-reviewed error categories. |
 | 22 | Break reminders | No reminder/timer | None | **Not started.** |
 
@@ -52,14 +52,14 @@ Status meanings: **Implemented** = feature exists in this project; **Partial** =
 | XP and leaderboard | **Not started** | No ledger or student opt-in leaderboard. |
 | Groq setup and reliability | **Partial** | The key has been supplied. Server-only access, bounded excerpt/citation validation, timeout, one transient retry, per-user rate cap and metadata exist. Optional `GROQ_MODEL` defaults to `qwen/qwen3.8-27b`. Live provider behavior is **not verified**; this twin workflow requires no AI calls. |
 | Consistency and authorization | **Partial** | Baseline sessions, practice, twin follow-ups, and comprehension answers persist and guard duplicate submissions; teacher/student scope and publication are checked on server. |
-| Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 15 tests). Tests cover learning evidence, source checks, timetable/privacy, feasibility/replanning, FSRS due/retry/rating/mastery, and adaptive mock prioritization, answer hiding, persistence, idempotent completion, and separation from mastery. Provider responses are simulated; no live Groq call was made. |
-| Preview / direct development URL | **Passed** | Workflow restarted cleanly after the FSRS migrations; direct URL and Preview returned HTTP 200 and the public landing page rendered. Signed-in schedule, review, and mock screens still require real NST accounts. |
-| Signed-in browser flow | **Pending owner verification** | With actual NST teacher/student accounts, verify a teacher-created resource/baseline, student lesson/practice/twin/review, class schedule, and private availability. Do not use a test-login bypass. |
+| Current isolated checks | **Passed** | `npm run build`; `npm run test:isolated` (2 test files, 16 tests). Tests cover learning evidence, source checks, schedule/privacy, feasibility/replanning, FSRS answer-first scheduling, adaptive mocks, and assignment publishing/submission/teacher correction/access boundaries. Provider responses are simulated; no live Groq call was made. |
+| Preview / direct development URL | **Passed** | Workflow restarted cleanly after the assignment migration; direct URL and Preview returned HTTP 200 and the public landing page rendered. Signed-in assignment and study screens need real NST accounts. |
+| Signed-in browser flow | **Pending owner verification** | With real NST teacher/student accounts, verify resource/baseline, lesson/practice/twin/review/mock, assignments and feedback, class schedule, and private availability. Do not use a test-login bypass. |
 
 ## Remaining implementation order
 
-1. Add assignment import, diagnosis, teacher review/correction, and safe integration of verified outcomes.
-2. Add teacher analytics for concept timelines, evidence quality, and schedule completion.
+1. Add teacher analytics for concept timelines, evidence quality, assignment diagnosis, and schedule completion.
+2. Add assignment imports, structured error diagnosis, and safe teacher-verified outcome integration.
 3. Trigger schedule/curriculum recalibration from missed work and new diagnostic evidence without changing deadlines.
 4. Add XP/opt-in leaderboard, voice, break reminders, and finish remaining intake/personalization/tutor controls.
 5. Complete intake, goal milestones, curriculum adaptation, preference feedback, and tutor controls.

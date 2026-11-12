@@ -332,6 +332,34 @@ export const adaptiveMockSessions = pgTable("adaptive_mock_sessions",{
   createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
   completedAt: timestamp("completed_at",{withTimezone:true})
 },table=>[uniqueIndex("adaptive_mock_one_active_per_course").on(table.userId,table.courseId).where(sql`${table.status}='active'`)]);
+export const assignments = pgTable("assignments",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  createdBy: uuid("created_by").notNull().references(()=>users.id),
+  title: text("title").notNull(),
+  instructions: text("instructions").notNull(),
+  dueAt: timestamp("due_at",{withTimezone:true}),
+  rubric: jsonb("rubric").$type<string[]>().notNull().default([]),
+  status: text("status").notNull().default("draft"),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+  publishedAt: timestamp("published_at",{withTimezone:true})
+});
+export const assignmentSubmissions = pgTable("assignment_submissions",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  assignmentId: uuid("assignment_id").notNull().references(()=>assignments.id),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  response: text("response").notNull(),
+  diagnosis: text("diagnosis").notNull().default(""),
+  confidence: integer("confidence").notNull(),
+  status: text("status").notNull().default("submitted"),
+  score: integer("score"),
+  rubricScores: jsonb("rubric_scores").$type<number[]>(),
+  misconception: text("misconception"),
+  teacherFeedback: text("teacher_feedback"),
+  reviewedBy: uuid("reviewed_by").references(()=>users.id),
+  submittedAt: timestamp("submitted_at",{withTimezone:true}).defaultNow().notNull(),
+  reviewedAt: timestamp("reviewed_at",{withTimezone:true})
+},table=>[uniqueIndex("assignment_submission_one_per_student").on(table.assignmentId,table.userId)]);
 export const aiGenerations = pgTable("ai_generations", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id),
