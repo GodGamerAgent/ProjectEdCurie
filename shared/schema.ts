@@ -131,6 +131,14 @@ export const studentIntakes = pgTable("student_intakes",{
   goals: text("goals"),
   updatedAt: timestamp("updated_at",{withTimezone:true}).defaultNow().notNull()
 },table=>[uniqueIndex("student_intakes_user_course_unique").on(table.userId,table.courseId)]);
+export const studyDurationEvents = pgTable("study_duration_events",{
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(()=>users.id),
+  courseId: uuid("course_id").notNull().references(()=>courses.id),
+  eventKey: uuid("event_key").notNull(),
+  durationSeconds: integer("duration_seconds").notNull(),
+  createdAt: timestamp("created_at",{withTimezone:true}).defaultNow().notNull()
+},table=>[uniqueIndex("study_duration_user_event_unique").on(table.userId,table.eventKey)]);
 export const baselineSubmissions = pgTable("baseline_submissions", {
   id: uuid("id").defaultRandom().primaryKey(),
   assessmentId: uuid("assessment_id").notNull().references(() => assessments.id),

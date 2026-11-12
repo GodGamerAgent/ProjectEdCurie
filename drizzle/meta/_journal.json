@@ -169,6 +169,13 @@
       "when": 1794469520574,
       "tag": "0023_conscious_silver_samurai",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794469930865,
+      "tag": "0024_plain_newton_destine",
+      "breakpoints": true
     }
   ]
 }

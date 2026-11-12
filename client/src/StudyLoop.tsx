@@ -85,11 +85,20 @@ function AdaptiveMock({courseId,baselineReady}:{courseId:string|number;baselineR
     </div>}
   </section>;
 }
-function BreakTimer() {
+function BreakTimer({courseId}:{courseId:string|number}) {
   const [focusMinutes,setFocusMinutes]=useState(()=>Number(localStorage.getItem("edcurie-focus-minutes")||25));
   const [breakMinutes,setBreakMinutes]=useState(()=>Number(localStorage.getItem("edcurie-break-minutes")||5));
   const [mode,setMode]=useState<"focus"|"break"|null>(null),[running,setRunning]=useState(false);
   const [seconds,setSeconds]=useState(focusMinutes*60),[message,setMessage]=useState("");
+  const [tracked,setTracked]=useState({seconds:0,sessions:0}),[recordError,setRecordError]=useState("");
+  const loggedFocus=useRef(false);
+  useEffect(()=>{void api<typeof tracked>(`/api/courses/${courseId}/study-duration`).then(setTracked).catch(e=>setRecordError(e.message));},[courseId]);
+  async function recordFocus(durationSeconds:number){
+    if(durationSeconds<60)return;
+    setRecordError("");
+    try{const result=await api<{seconds:number;sessions:number}>(`/api/courses/${courseId}/study-duration`,{method:"POST",body:jsonBody({eventKey:crypto.randomUUID(),durationSeconds})});setTracked(result);}
+    catch(e){setRecordError(e instanceof Error?e.message:"Focus time could not be saved.");}
+  }
   useEffect(()=>{
     if(!running)return;
     const timer=window.setInterval(()=>setSeconds(left=>Math.max(0,left-1)),1000);
@@ -98,7 +107,7 @@ function BreakTimer() {
   useEffect(()=>{
     if(!running||seconds!==0||!mode)return;
     setRunning(false);
-    if(mode==="focus"){setMode("break");setSeconds(breakMinutes*60);setMessage("Focus block finished. Take a short break before your next session.");}
+    if(mode==="focus"){if(!loggedFocus.current){loggedFocus.current=true;void recordFocus(focusMinutes*60);}setMode("break");setSeconds(breakMinutes*60);setMessage("Focus block finished. Take a short break before your next session.");}
     else{setMode(null);setSeconds(focusMinutes*60);setMessage("Break finished. You can start another focus session when ready.");}
   },[running,seconds,mode,breakMinutes,focusMinutes]);
   const clock=`${String(Math.floor(seconds/60)).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`;
@@ -108,9 +117,9 @@ function BreakTimer() {
     <p className="muted">Choose a focus block and break length. EdCurie will remind you here when each block ends.</p>
     <div className="form-grid"><div className="field"><label htmlFor="focus-minutes">Focus minutes</label><select id="focus-minutes" disabled={Boolean(mode)} value={focusMinutes} onChange={e=>setFocus(Number(e.target.value))}>{[15,25,35,45,60].map(n=><option key={n} value={n}>{n} minutes</option>)}</select></div>
       <div className="field"><label htmlFor="break-minutes">Break minutes</label><select id="break-minutes" disabled={Boolean(mode)} value={breakMinutes} onChange={e=>setBreak(Number(e.target.value))}>{[3,5,10,15].map(n=><option key={n} value={n}>{n} minutes</option>)}</select></div></div>
-    <div className="course-card row" style={{marginTop:12}}><div><strong aria-live="polite">{mode==="focus"?"Focus":mode==="break"?"Break":"Ready"} · {clock}</strong>{message&&<p role="status">{message}</p>}</div>
-      {!mode?<button className="button primary small" onClick={()=>{setMessage("");setMode("focus");setSeconds(focusMinutes*60);setRunning(true);}}>Start focus block</button>
-        :mode==="focus"?<div className="card-actions"><button className="button small" onClick={()=>setRunning(!running)}>{running?"Pause":"Resume"}</button><button className="button small" onClick={()=>{setRunning(false);setMode(null);setSeconds(focusMinutes*60);}}>End focus</button></div>
+    <div className="course-card row" style={{marginTop:12}}><div><strong aria-live="polite">{mode==="focus"?"Focus":mode==="break"?"Break":"Ready"} · {clock}</strong>{message&&<p role="status">{message}</p>}<p className="muted">Tracked focus time · {Math.floor(tracked.seconds/60)} minutes in the last 14 days across {tracked.sessions} sessions</p>{recordError&&<p className="notice error" role="alert">{recordError}</p>}</div>
+      {!mode?<button className="button primary small" onClick={()=>{setMessage("");setMode("focus");setSeconds(focusMinutes*60);loggedFocus.current=false;setRunning(true);}}>Start focus block</button>
+        :mode==="focus"?<div className="card-actions"><button className="button small" onClick={()=>setRunning(!running)}>{running?"Pause":"Resume"}</button><button className="button small" onClick={()=>{const elapsed=focusMinutes*60-seconds;if(!loggedFocus.current){loggedFocus.current=true;void recordFocus(elapsed);}setRunning(false);setMode(null);setSeconds(focusMinutes*60);}}>End focus</button></div>
         :!running?<div className="card-actions"><button className="button primary small" onClick={()=>{setMessage("");setRunning(true);}}>Start break</button><button className="button small" onClick={()=>{setMode(null);setSeconds(focusMinutes*60);setMessage("");}}>Skip break</button></div>
         :<button className="button small" onClick={()=>{setRunning(false);setMode(null);setSeconds(focusMinutes*60);}}>End break</button>}
     </div>
@@ -256,6 +265,6 @@ export function StudentStudy({courseId,baselineReady}:{courseId:string|number;ba
     <StudentSchedule courseId={courseId} baselineReady={baselineReady} refreshKey={goalRefreshKey} onStartBlock={openPlannedConcept}/>
     <ReviewVault courseId={courseId} baselineReady={baselineReady} refreshKey={reviewRefreshKey}/>
     <AdaptiveMock courseId={courseId} baselineReady={baselineReady}/>
-    <BreakTimer/>
+    <BreakTimer courseId={courseId}/>
   </section>;
 }

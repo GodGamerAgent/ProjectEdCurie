@@ -156,8 +156,10 @@ export function studyRoutes(db: Pool, lesson = groqLesson) {
     const row=resource.rows[0], parts=String(row.text).split(/(?=\[Page \d+\])/).filter((x)=>x.trim()).slice(0,4);
     const excerpts:Excerpt[]=parts.map((part)=>({resourceId:row.id,resourceVersionId:row.resourceVersionId,title:row.title,location:part.match(/^\[Page (\d+)\]/)?.[1] ? `Page ${part.match(/^\[Page (\d+)\]/)![1]}` : "Section 1",text:part.slice(0,4000)}));
     const pref=await db.query("SELECT feedback,hints,formats FROM student_preferences WHERE user_id=$1",[user.id]);
-    const intake=await db.query(`SELECT background,confidence,target_assessment AS "targetAssessment",target_date AS "targetDate",goals
-      FROM student_intakes WHERE user_id=$1 AND course_id=$2`,[user.id,c.course_id]);
+    const intake=await db.query(`SELECT si.background,si.confidence,si.target_assessment AS "targetAssessment",
+      to_char(si.target_date,'YYYY-MM-DD') AS "targetDate",si.goals,
+      COALESCE((SELECT sum(duration_seconds) FROM study_duration_events WHERE user_id=$1 AND course_id=$2 AND created_at>=now()-interval '14 days'),0)::int/60 AS "activeStudyMinutes14d"
+      FROM (SELECT 1) empty LEFT JOIN student_intakes si ON si.user_id=$1 AND si.course_id=$2`,[user.id,c.course_id]);
     const requestedFormat=typeof req.body?.format==="string"?req.body.format:"direct";
     if(!["direct","intuition","analogy","formal","code_trace"].includes(requestedFormat))throw new HttpError(400,"Choose a supported explanation format.");
     const model=process.env.GROQ_MODEL?.trim()||"qwen/qwen3.8-27b";

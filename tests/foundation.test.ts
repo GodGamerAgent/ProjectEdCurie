@@ -98,6 +98,12 @@ describe("foundation access and onboarding", () => {
     expect((await request(app).get(`/api/courses/${courseId}/intake`).set(as("student"))).body.targetAssessment).toBe("NST term test");
     expect((await request(app).delete(`/api/courses/${courseId}/intake`).set(as("student"))).body).toEqual({deleted:true});
     expect((await request(app).get(`/api/courses/${courseId}/intake`).set(as("student"))).body.confidence).toBeNull();
+    const durationUrl=`/api/courses/${courseId}/study-duration`,eventKey="123e4567-e89b-42d3-a456-426614174000";
+    expect((await request(app).post(durationUrl).set(as("teacher")).send({eventKey,durationSeconds:600})).status).toBe(403);
+    expect((await request(app).post(durationUrl).set(as("student")).send({eventKey,durationSeconds:59})).status).toBe(400);
+    expect((await request(app).post(durationUrl).set(as("student")).send({eventKey,durationSeconds:600})).body).toMatchObject({recorded:true,seconds:600,sessions:1});
+    expect((await request(app).post(durationUrl).set(as("student")).send({eventKey,durationSeconds:1200})).body).toMatchObject({recorded:false,seconds:600,sessions:1});
+    expect((await request(app).get(durationUrl).set(as("outsider"))).status).toBe(403);
   });
   it("requires explicit institute assignment for a legacy teacher", async () => {
     await db.query("INSERT INTO users (provider_id,email,role) VALUES ('legacy-teacher','legacy@example.edu','teacher')");
@@ -293,6 +299,7 @@ describe("foundation access and onboarding", () => {
     const missingKey=await request(app).post(`/api/concepts/${b.body.id}/lesson`).set(as("student"));
     expect(missingKey.status,JSON.stringify(missingKey.body)).toBe(503);
     await request(app).put(`/api/courses/${id}/intake`).set(as("student")).send({background:"I have studied motion.",confidence:3,targetAssessment:"Physics unit test",goals:"Understand the source explanation."});
+    await request(app).post(`/api/courses/${id}/study-duration`).set(as("student")).send({eventKey:"123e4567-e89b-42d3-a456-426614174001",durationSeconds:600});
     vi.stubEnv("GROQ_API_KEY","isolated-test-key");
     try {
       const provider=vi.fn(async(_url:string,options:RequestInit)=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({explanation:"Explanation",citations:[{resourceId:resource.body.id,location:"Page 1"}],checks:[{prompt:"What does the material say?",options:["One","Two","Three","Four"],correctOption:2,citations:[{resourceId:resource.body.id,location:"Page 1"}]}]})}}]}),{status:200,headers:{"Content-Type":"application/json"}}));
@@ -301,7 +308,7 @@ describe("foundation access and onboarding", () => {
       expect(lesson.status).toBe(200); expect(lesson.body.citations[0].location).toBe("Page 1");
       const requestBody=JSON.parse(String(provider.mock.calls[0]?.[1]?.body));
       const providerPrompt=JSON.parse(requestBody.messages.find((message:any)=>message.role==="user").content);
-      expect(providerPrompt.learnerContext).toMatchObject({background:"I have studied motion.",confidence:3,targetAssessment:"Physics unit test",goals:"Understand the source explanation."});
+      expect(providerPrompt.learnerContext).toMatchObject({background:"I have studied motion.",confidence:3,targetAssessment:"Physics unit test",goals:"Understand the source explanation.",activeStudyMinutes14d:10});
       expect(lesson.body.checks).toHaveLength(1);expect(lesson.body.checks[0].options).toEqual(["One","Two","Three","Four"]);
       expect(lesson.body.checks[0]).not.toHaveProperty("correctOption");
       expect((await request(app).get(`/api/concepts/${b.body.id}/lessons`).set(as("teacher"))).status).toBe(403);
